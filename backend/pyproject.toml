@@ -2,7 +2,7 @@
 name = "ai-rel-graph-backend"
 version = "0.1.0"
 description = "Backend for semantic graph visualization"
-authors = ["Kaelem Deng <dengkaelem@gmail.com>", "Shawn Prather <>"]
+authors = ["Kaelem Deng <dengkaelem@gmail.com>", "Shawn Prather <contact@shawnprather.dev>"]
 packages = [{include = "app"}]
 
 [tool.poetry.dependencies]
