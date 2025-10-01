@@ -1,0 +1,195 @@
+.PHONY: help install setup dev test clean docker-up docker-down docker-logs docker-rebuild db-migrate db-rollback backend-test frontend-test format lint
+
+# Colors for output
+CYAN := \033[0;36m
+GREEN := \033[0;32m
+YELLOW := \033[0;33m
+RED := \033[0;31m
+NC := \033[0m # No Color
+
+help: ## Show this help message
+	@echo "$(CYAN)Available commands:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
+
+# === Setup Commands ===
+
+install: ## Install all dependencies (backend + frontend)
+	@echo "$(CYAN)Installing backend dependencies...$(NC)"
+	cd backend && poetry install
+	@echo "$(GREEN)✓ Backend dependencies installed$(NC)"
+	@echo "$(CYAN)Installing frontend dependencies...$(NC)"
+	cd frontend && pnpm install
+	@echo "$(GREEN)✓ Frontend dependencies installed$(NC)"
+
+setup: ## Initial project setup (copy env files, install deps)
+	@echo "$(CYAN)Setting up project...$(NC)"
+	@if [ ! -f backend/.env ]; then \
+		cp backend/.env.example backend/.env; \
+		echo "$(GREEN)✓ Created backend/.env$(NC)"; \
+	fi
+	@if [ ! -f frontend/.env.local ]; then \
+		cp frontend/.env.local.example frontend/.env.local; \
+		echo "$(GREEN)✓ Created frontend/.env.local$(NC)"; \
+	fi
+	@$(MAKE) install
+	@echo "$(GREEN)✓ Project setup complete!$(NC)"
+
+# === Development Commands ===
+
+dev-backend: ## Run backend in development mode (local, no Docker)
+	cd backend && poetry run uvicorn app.main:app --reload
+
+dev-frontend: ## Run frontend in development mode (local, no Docker)
+	cd frontend && pnpm dev
+
+# === Docker Commands ===
+
+docker-up: ## Start all Docker services
+	@echo "$(CYAN)Starting Docker services...$(NC)"
+	docker-compose up -d
+	@echo "$(GREEN)✓ Services started$(NC)"
+	@$(MAKE) docker-status
+
+docker-down: ## Stop all Docker services
+	@echo "$(CYAN)Stopping Docker services...$(NC)"
+	docker-compose down
+	@echo "$(GREEN)✓ Services stopped$(NC)"
+
+docker-logs: ## Show logs from all services
+	docker-compose logs -f
+
+docker-logs-backend: ## Show backend logs
+	docker-compose logs -f backend
+
+docker-logs-frontend: ## Show frontend logs
+	docker-compose logs -f frontend
+
+docker-rebuild: ## Rebuild and restart all Docker services
+	@echo "$(CYAN)Rebuilding Docker services...$(NC)"
+	docker-compose up -d --build
+	@echo "$(GREEN)✓ Services rebuilt$(NC)"
+
+docker-clean: ## Remove all Docker containers, volumes, and images
+	@echo "$(YELLOW)WARNING: This will remove all containers, volumes, and images$(NC)"
+	@read -p "Are you sure? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		docker-compose down -v; \
+		docker system prune -af; \
+		echo "$(GREEN)✓ Docker cleaned$(NC)"; \
+	fi
+
+docker-status: ## Check status of Docker services
+	@echo "$(CYAN)Docker Services Status:$(NC)"
+	@docker-compose ps
+
+docker-shell-backend: ## Open shell in backend container
+	docker-compose exec backend /bin/bash
+
+docker-shell-frontend: ## Open shell in frontend container
+	docker-compose exec frontend /bin/sh
+
+# === Database Commands ===
+
+db-migrate: ## Create a new database migration
+	@read -p "Migration message: " msg; \
+	cd backend && poetry run alembic revision --autogenerate -m "$$msg"
+
+db-upgrade: ## Run database migrations
+	cd backend && poetry run alembic upgrade head
+
+db-downgrade: ## Rollback last migration
+	cd backend && poetry run alembic downgrade -1
+
+db-reset: ## Reset database (WARNING: destroys all data)
+	@echo "$(RED)WARNING: This will destroy all data in the database$(NC)"
+	@read -p "Are you sure? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		docker-compose down -v postgres; \
+		docker-compose up -d postgres; \
+		sleep 5; \
+		$(MAKE) db-upgrade; \
+		echo "$(GREEN)✓ Database reset$(NC)"; \
+	fi
+
+db-shell: ## Open PostgreSQL shell
+	docker-compose exec postgres psql -U postgres -d semantic_graph
+
+# === Testing Commands ===
+
+test: ## Run all tests
+	@echo "$(CYAN)Running all tests...$(NC)"
+	@$(MAKE) backend-test || echo "$(RED)Backend tests failed$(NC)"
+	@$(MAKE) frontend-test || echo "$(RED)Frontend tests failed$(NC)"
+
+backend-test: ## Run backend tests
+	@echo "$(CYAN)Running backend tests...$(NC)"
+	cd backend && poetry run pytest
+	@echo "$(GREEN)✓ Backend tests complete$(NC)"
+
+backend-test-cov: ## Run backend tests with coverage report
+	@echo "$(CYAN)Running backend tests with coverage...$(NC)"
+	cd backend && poetry run pytest --cov=app --cov-report=html
+	@echo "$(GREEN)✓ Coverage report generated at backend/htmlcov/index.html$(NC)"
+
+frontend-test: ## Run frontend tests
+	@echo "$(CYAN)Running frontend tests...$(NC)"
+	cd frontend && pnpm test
+	@echo "$(GREEN)✓ Frontend tests complete$(NC)"
+
+# === Code Quality Commands ===
+
+format: ## Format all code (black, prettier)
+	@echo "$(CYAN)Formatting backend code...$(NC)"
+	cd backend && poetry run black .
+	@echo "$(CYAN)Formatting frontend code...$(NC)"
+	cd frontend && pnpm exec prettier --write .
+	@echo "$(GREEN)✓ Code formatted$(NC)"
+
+lint: ## Lint all code (ruff, eslint)
+	@echo "$(CYAN)Linting backend...$(NC)"
+	cd backend && poetry run ruff check .
+	@echo "$(CYAN)Linting frontend...$(NC)"
+	cd frontend && pnpm lint
+	@echo "$(GREEN)✓ Linting complete$(NC)"
+
+typecheck: ## Run type checking
+	@echo "$(CYAN)Type checking backend...$(NC)"
+	cd backend && poetry run mypy app
+	@echo "$(CYAN)Type checking frontend...$(NC)"
+	cd frontend && pnpm exec tsc --noEmit
+	@echo "$(GREEN)✓ Type checking complete$(NC)"
+
+check: format lint typecheck test ## Run all quality checks
+
+# === Utility Commands ===
+
+clean: ## Clean temporary files and caches
+	@echo "$(CYAN)Cleaning temporary files...$(NC)"
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name "htmlcov" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	cd frontend && rm -rf .next 2>/dev/null || true
+	@echo "$(GREEN)✓ Cleaned$(NC)"
+
+health-check: ## Check if all services are healthy
+	@echo "$(CYAN)Checking service health...$(NC)"
+	@echo -n "Backend API: "
+	@curl -s http://localhost:8000/health > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+	@echo -n "Frontend: "
+	@curl -s http://localhost:80 > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+	@echo -n "PostgreSQL: "
+	@docker-compose exec -T postgres pg_isready -U postgres > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+	@echo -n "Redis: "
+	@docker-compose exec -T redis redis-cli ping > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+
+urls: ## Show all service URLs
+	@echo "$(CYAN)Service URLs:$(NC)"
+	@echo "  Frontend:        $(GREEN)http://localhost$(NC)"
+	@echo "  Backend API:     $(GREEN)http://localhost:8000$(NC)"
+	@echo "  API Docs:        $(GREEN)http://localhost:8000/docs$(NC)"
+	@echo "  PostgreSQL:      $(GREEN)localhost:5432$(NC)"
+	@echo "  Redis:           $(GREEN)localhost:6379$(NC)"
