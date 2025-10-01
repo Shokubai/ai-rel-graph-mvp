@@ -2,10 +2,30 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## Core Concept
 
-AIRelGraph is a semantic document analysis system that processes documents from Google Drive, extracts relationships using ML embeddings, and visualizes them as an interactive graph. The system consists of:
+AIRelGraph analyzes documents to discover **semantic relationships** - connections based on meaning and purpose rather than explicit links. For example:
 
+- Two research papers about penguin migration → linked by shared topic
+- A budget spreadsheet and financial report → linked by similar purpose/domain
+- Meeting notes mentioning "Q4 strategy" → linked to strategy documents
+
+**How it works:**
+1. User provides a Google Drive folder
+2. System extracts text from all documents
+3. ML model (sentence-transformers) converts text to 384-dimensional vectors (embeddings)
+4. Documents are clustered by purpose/topic
+5. Interactive graph visualizes connections (Obsidian-style force-directed layout)
+
+**The Graph:**
+- **Nodes**: Individual files (size = number of connections)
+- **Edges**: Semantic similarity (stronger relationships = closer positioning)
+- **Clusters**: Groups of related documents
+- **Interaction**: Click nodes to preview, drag to explore
+
+Unlike folder hierarchies or keyword search, this reveals **hidden patterns** in how documents relate conceptually.
+
+The system consists of:
 - **Backend**: FastAPI application with PostgreSQL (pgvector), Redis, and Celery workers for async processing
 - **Frontend**: Next.js 15 application with React 19, using Cytoscape for graph visualization
 - **Infrastructure**: Docker Compose orchestrating backend, frontend, database, Redis, and Celery workers
@@ -141,6 +161,12 @@ API endpoints go in `app/api/v1/`. The main FastAPI app is in `app/main.py`. COR
 
 ### Frontend Routing
 Next.js App Router: pages are in `frontend/src/app/` with route structure based on directory names (e.g., `app/graph/page.tsx` → `/graph`).
+
+### Semantic Similarity Pipeline
+1. Text extraction: PDFs, DOCX, XLSX → raw text
+2. Embedding generation: sentence-transformers creates vector representation
+3. Clustering: DBSCAN/K-means groups documents by semantic proximity
+4. Graph construction: Nodes (files) + edges (relationships) → Cytoscape visualization
 
 ## Service URLs
 - Frontend: http://localhost
