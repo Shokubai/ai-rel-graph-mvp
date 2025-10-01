@@ -7,7 +7,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
-    PROJECT_NAME: str = "Semantic Graph API"
+    PROJECT_NAME: str = "AI Relational Graph API"
 
     # Database
     POSTGRES_USER: str = "postgres"

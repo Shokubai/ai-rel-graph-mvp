@@ -46,27 +46,27 @@ dev-frontend: ## Run frontend in development mode (local, no Docker)
 
 docker-up: ## Start all Docker services
 	@echo "$(CYAN)Starting Docker services...$(NC)"
-	docker-compose up -d
+	docker compose up -d
 	@echo "$(GREEN)✓ Services started$(NC)"
 	@$(MAKE) docker-status
 
 docker-down: ## Stop all Docker services
 	@echo "$(CYAN)Stopping Docker services...$(NC)"
-	docker-compose down
+	docker compose down
 	@echo "$(GREEN)✓ Services stopped$(NC)"
 
 docker-logs: ## Show logs from all services
-	docker-compose logs -f
+	docker compose logs -f
 
 docker-logs-backend: ## Show backend logs
-	docker-compose logs -f backend
+	docker compose logs -f backend
 
 docker-logs-frontend: ## Show frontend logs
-	docker-compose logs -f frontend
+	docker compose logs -f frontend
 
 docker-rebuild: ## Rebuild and restart all Docker services
 	@echo "$(CYAN)Rebuilding Docker services...$(NC)"
-	docker-compose up -d --build
+	docker compose up -d --build
 	@echo "$(GREEN)✓ Services rebuilt$(NC)"
 
 docker-clean: ## Remove all Docker containers, volumes, and images
@@ -74,20 +74,20 @@ docker-clean: ## Remove all Docker containers, volumes, and images
 	@read -p "Are you sure? [y/N] " -n 1 -r; \
 	echo; \
 	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
-		docker-compose down -v; \
+		docker compose down -v; \
 		docker system prune -af; \
 		echo "$(GREEN)✓ Docker cleaned$(NC)"; \
 	fi
 
 docker-status: ## Check status of Docker services
 	@echo "$(CYAN)Docker Services Status:$(NC)"
-	@docker-compose ps
+	@docker compose ps
 
 docker-shell-backend: ## Open shell in backend container
-	docker-compose exec backend /bin/bash
+	docker compose exec backend /bin/bash
 
 docker-shell-frontend: ## Open shell in frontend container
-	docker-compose exec frontend /bin/sh
+	docker compose exec frontend /bin/sh
 
 # === Database Commands ===
 
@@ -106,15 +106,15 @@ db-reset: ## Reset database (WARNING: destroys all data)
 	@read -p "Are you sure? [y/N] " -n 1 -r; \
 	echo; \
 	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
-		docker-compose down -v postgres; \
-		docker-compose up -d postgres; \
+		docker compose down -v postgres; \
+		docker compose up -d postgres; \
 		sleep 5; \
 		$(MAKE) db-upgrade; \
 		echo "$(GREEN)✓ Database reset$(NC)"; \
 	fi
 
 db-shell: ## Open PostgreSQL shell
-	docker-compose exec postgres psql -U postgres -d semantic_graph
+	docker compose exec postgres psql -U postgres -d semantic_graph
 
 # === Testing Commands ===
 
@@ -182,9 +182,9 @@ health-check: ## Check if all services are healthy
 	@echo -n "Frontend: "
 	@curl -s http://localhost:80 > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
 	@echo -n "PostgreSQL: "
-	@docker-compose exec -T postgres pg_isready -U postgres > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+	@docker compose exec -T postgres pg_isready -U postgres > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
 	@echo -n "Redis: "
-	@docker-compose exec -T redis redis-cli ping > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+	@docker compose exec -T redis redis-cli ping > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
 
 urls: ## Show all service URLs
 	@echo "$(CYAN)Service URLs:$(NC)"
