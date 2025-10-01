@@ -14,6 +14,9 @@ on:
 
 jobs:
   test:
+    # Skip if commit message contains [skip ci] or [no ci]
+    if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[no ci]')"
+    
     runs-on: ubuntu-latest
     
     services:
@@ -86,7 +89,7 @@ jobs:
       working-directory: ./backend
       continue-on-error: true
       run: |
-        poetry run mypy app || echo "::warning::Type checking failed"
+        poetry run mypy -p app || echo "::warning::Type checking failed"
     
     - name: Run tests
       working-directory: ./backend
