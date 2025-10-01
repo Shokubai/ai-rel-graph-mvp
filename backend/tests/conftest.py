@@ -37,6 +37,7 @@ def db() -> Generator:
 @pytest.fixture(scope="function")
 def client(db) -> Generator:
     """Create a test client with database override."""
+
     def override_get_db():
         try:
             yield db
