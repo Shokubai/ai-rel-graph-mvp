@@ -23,5 +23,5 @@ class FileCluster(Base):
 
     __tablename__ = "file_clusters"
 
-    file_id = Column(UUID(as_uuid=True), ForeignKey("files.id"), primary_key=True)
-    cluster_id = Column(UUID(as_uuid=True), ForeignKey("clusters.id"), primary_key=True)
+    file_id = Column(UUID(as_uuid=True), ForeignKey("files.id", ondelete="CASCADE"), primary_key=True)
+    cluster_id = Column(UUID(as_uuid=True), ForeignKey("clusters.id", ondelete="CASCADE"), primary_key=True)

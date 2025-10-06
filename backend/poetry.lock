@@ -2038,6 +2038,20 @@ files = [
 ]
 
 [[package]]
+name = "pgvector"
+version = "0.2.5"
+description = "pgvector support for Python"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "pgvector-0.2.5-py2.py3-none-any.whl", hash = "sha256:5e5e93ec4d3c45ab1fa388729d56c602f6966296e19deee8878928c6d567e41b"},
+]
+
+[package.dependencies]
+numpy = "*"
+
+[[package]]
 name = "pillow"
 version = "11.3.0"
 description = "Python Imaging Library (Fork)"
@@ -4174,4 +4188,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "3f355d8be7fd60754e91fc58c30c6eadace74fa698059cfda75f81d02e48ca58"
+content-hash = "6ec3d8dd684e71ba5c00fa14350f5bb62920c464057e5b1866540f150c2e3377"
