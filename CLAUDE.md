@@ -27,7 +27,7 @@ Unlike folder hierarchies or keyword search, this reveals **hidden patterns** in
 
 The system consists of:
 - **Backend**: FastAPI application with PostgreSQL (pgvector), Redis, and Celery workers for async processing
-- **Frontend**: Next.js 15 application with React 19, using Cytoscape for graph visualization
+- **Frontend**: Next.js 15 application with React 19 with react force graph
 - **Infrastructure**: Docker Compose orchestrating backend, frontend, database, Redis, and Celery workers
 
 ## Architecture
@@ -52,7 +52,7 @@ The system consists of:
 ### Frontend (`frontend/`)
 - **Framework**: Next.js 15 with App Router (not Pages Router)
 - **State**: Zustand for global state, TanStack Query for server state
-- **Graph**: Cytoscape.js with cola layout for force-directed graphs
+- **Graph**: react-force-graph 2D
 - **Styling**: Tailwind CSS v4
 - **Location**: Source files in `frontend/src/app/`
 
