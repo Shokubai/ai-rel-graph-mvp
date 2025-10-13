@@ -2,9 +2,9 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Column, DateTime, Index, String, Text
+from sqlalchemy import BigInteger, Column, DateTime, String, Text
 from sqlalchemy.dialects.postgresql import UUID
-from pgvector.sqlalchemy import Vector
+from sqlalchemy.orm import relationship
 
 from app.core.database import Base
 
@@ -23,8 +23,10 @@ class File(Base):
     modified_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     processing_status = Column(String(50), default="pending", index=True)
     text_content = Column(Text)
-    embedding = Column(Vector(384))
 
-    __table_args__ = (
-        Index("ix_files_embedding", "embedding", postgresql_using="ivfflat", postgresql_ops={"embedding": "vector_cosine_ops"}),
+    # Relationships
+    tag_associations = relationship(
+        "FileTag",
+        back_populates="file",
+        cascade="all, delete-orphan",
     )

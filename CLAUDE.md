@@ -13,38 +13,41 @@ AIRelGraph analyzes documents to discover **semantic relationships** - connectio
 **How it works:**
 1. User provides a Google Drive folder
 2. System extracts text from all documents
-3. ML model (sentence-transformers) converts text to 384-dimensional vectors (embeddings)
-4. DBSCAN algorithm automatically discovers clusters based on semantic similarity
-5. Interactive graph visualizes connections (force-directed layout)
+3. Automated tag extraction identifies keywords and categorizes documents
+4. Documents sharing tags are connected (minimum 2 shared tags)
+5. Community detection algorithm discovers clusters based on tag relationships
+6. Interactive graph visualizes connections (force-directed layout)
 
 **The Graph:**
 - **Nodes**: Individual files (size = number of connections)
-- **Edges**: Semantic similarity (stronger relationships = closer positioning)
-- **Clusters**: Auto-discovered groups of related documents
+- **Edges**: Shared tag count (more shared tags = stronger connection)
+- **Clusters**: Auto-discovered groups of documents with similar tags
 - **Interaction**: Click nodes to preview, drag to explore
 
-Unlike folder hierarchies or keyword search, this reveals **hidden patterns** in how documents relate conceptually.
+Unlike folder hierarchies or keyword search, this reveals **hidden patterns** in how documents relate through shared topics and categories.
 
 ## Architecture
 
 ### Backend (`backend/`)
 - **Framework**: FastAPI with SQLAlchemy ORM and Alembic migrations
-- **Database**: PostgreSQL with pgvector extension for semantic embeddings
+- **Database**: PostgreSQL for structured data storage
 - **Task Queue**: Celery workers backed by Redis for async document processing
-- **ML Pipeline**: sentence-transformers (all-MiniLM-L6-v2) generates 384-dim embeddings
+- **NLP Pipeline**: NLTK + scikit-learn for automated tag extraction and categorization
 
 **Database Models**:
-- `File`: Documents with text content, embeddings (VECTOR(384)), and processing status
-- `FileRelationship`: Semantic similarity connections (cosine similarity 0.0-1.0)
-- `Cluster`: Auto-discovered document groups (via DBSCAN)
+- `File`: Documents with text content and processing status
+- `Tag`: Extracted keywords with category classification (technology, finance, business, etc.)
+- `FileTag`: Many-to-many mapping with relevance scores
+- `FileRelationship`: Tag-based connections (shared_tag_count, Jaccard similarity)
+- `Cluster`: Auto-discovered document groups (via community detection)
 - `FileCluster`: Many-to-many mapping between files and clusters
 - `ProcessingJob`: Tracks background job progress and errors
 
 **Core modules**:
 - `app/core/`: Configuration, database setup, Celery app
-- `app/models/`: SQLAlchemy models with pgvector support
-- `app/api/v1/`: API endpoints (files, semantic processing)
-- `app/services/`: Business logic services (SemanticProcessingService)
+- `app/models/`: SQLAlchemy models for tags, files, and relationships
+- `app/api/v1/`: API endpoints (files, tag-based processing)
+- `app/services/`: Business logic services (TagExtractionService, SemanticProcessingService)
 - `app/workers/`: Celery tasks for async document processing
 
 ### Frontend (`frontend/`)
@@ -110,7 +113,7 @@ make clean              # Remove cache files
 
 ### Core Tables
 
-**files** - Document storage with embeddings
+**files** - Document storage
 ```sql
 id                  UUID PRIMARY KEY
 google_drive_id     VARCHAR(255) UNIQUE NOT NULL (indexed)
@@ -118,25 +121,42 @@ name                VARCHAR(500) NOT NULL
 mime_type           VARCHAR(100)
 size_bytes          BIGINT
 text_content        TEXT
-embedding           VECTOR(384)  -- pgvector, ivfflat indexed
 processing_status   VARCHAR(50) DEFAULT 'pending' (indexed)
 created_at          TIMESTAMP
 modified_at         TIMESTAMP
 ```
 
-**file_relationships** - Semantic similarity connections
+**tags** - Extracted keywords with categories
+```sql
+id              UUID PRIMARY KEY
+name            VARCHAR(100) UNIQUE NOT NULL (indexed)
+category        VARCHAR(50) (indexed)  -- technology, finance, business, etc.
+usage_count     INTEGER DEFAULT 0      -- number of files using this tag
+created_at      TIMESTAMP
+```
+
+**file_tags** - Many-to-many file↔tag mapping
+```sql
+file_id          UUID FK → files.id ON DELETE CASCADE (PK)
+tag_id           UUID FK → tags.id ON DELETE CASCADE (PK)
+relevance_score  FLOAT DEFAULT 1.0  -- how relevant the tag is to the document
+```
+
+**file_relationships** - Tag-based connections
 ```sql
 id                  UUID PRIMARY KEY
 source_file_id      UUID FK → files.id ON DELETE CASCADE
 target_file_id      UUID FK → files.id ON DELETE CASCADE
-similarity_score    FLOAT (0.0-1.0, indexed)
-relationship_type   VARCHAR(50) DEFAULT 'semantic_similarity'
+shared_tag_count    INTEGER NOT NULL (indexed)  -- number of tags in common
+similarity_score    FLOAT (0.0-1.0, indexed)    -- Jaccard similarity
+relationship_type   VARCHAR(50) DEFAULT 'tag_similarity'
 created_at          TIMESTAMP
 
 CONSTRAINTS:
   - source_file_id ≠ target_file_id (no self-relationships)
   - UNIQUE(source_file_id, target_file_id)
   - similarity_score BETWEEN 0.0 AND 1.0
+  - shared_tag_count >= 0
 ```
 
 **clusters** - Auto-discovered document groups
@@ -167,16 +187,17 @@ completed_at         TIMESTAMP
 
 ### Key Features
 
-✅ **pgvector Integration**: 384-dimensional embeddings with ivfflat index for fast cosine similarity search
-✅ **CASCADE Deletes**: Deleting files auto-removes relationships and cluster mappings
-✅ **Data Integrity**: Constraints prevent self-relationships, duplicate pairs, and invalid similarity scores
-✅ **Performance Indexes**: Optimized for status filtering, similarity queries, and vector search
+✅ **Tag-Based Relationships**: Documents connected by shared keywords and categories
+✅ **CASCADE Deletes**: Deleting files auto-removes tags, relationships, and cluster mappings
+✅ **Data Integrity**: Constraints prevent self-relationships, duplicate pairs, and invalid scores
+✅ **Performance Indexes**: Optimized for tag lookups, shared tag counting, and status filtering
+✅ **Category Classification**: Automatic categorization into 8 broad domains (technology, finance, etc.)
 
-## Semantic Pipeline
+## Tag-Based Processing Pipeline
 
-The semantic processing pipeline is implemented in [app/services/semantic.py](backend/app/services/semantic.py) as `SemanticProcessingService`. This service can be used directly or via Celery tasks for async processing.
+The tag-based processing pipeline is implemented in [app/services/semantic.py](backend/app/services/semantic.py) as `SemanticProcessingService` (renamed but still uses this class name for backward compatibility). Tag extraction is handled by [app/services/tag_extraction.py](backend/app/services/tag_extraction.py).
 
-### Using the Semantic Service
+### Using the Processing Service
 
 **Direct Usage (Synchronous)**:
 ```python
@@ -185,8 +206,9 @@ from app.core.database import SessionLocal
 
 # Initialize service
 service = SemanticProcessingService(
-    model_name="all-MiniLM-L6-v2",
-    similarity_threshold=0.5,
+    min_shared_tags=2,        # Minimum shared tags for relationships
+    min_tag_frequency=2,      # Minimum word frequency for tags
+    max_tags_per_doc=10,      # Maximum tags per document
 )
 
 # Process documents through full pipeline
@@ -194,12 +216,12 @@ db = SessionLocal()
 results = service.process_documents(
     session=db,
     files=files,  # List of File objects with text_content
-    threshold=0.5,
+    min_shared=2,
     show_progress=True,
 )
 
 # Results contain:
-# - embeddings: numpy array of embeddings
+# - file_tags: dict mapping file_id to list of (Tag, relevance) tuples
 # - relationships: list of FileRelationship objects
 # - clusters: list of (Cluster, files) tuples
 # - adjacency: graph adjacency dict
@@ -207,16 +229,16 @@ results = service.process_documents(
 
 **API Usage (Asynchronous via Celery)**:
 ```bash
-# Full pipeline: embeddings + relationships + clustering
+# Full pipeline: tag extraction + relationships + clustering
 POST /api/v1/semantic/process
 {
   "file_ids": ["uuid1", "uuid2", ...],
-  "similarity_threshold": 0.5,
+  "min_shared_tags": 2,
   "create_job": true
 }
 
 # Step-by-step processing
-POST /api/v1/semantic/embeddings        # Step 1: Generate embeddings
+POST /api/v1/semantic/tags              # Step 1: Extract tags
 POST /api/v1/semantic/relationships     # Step 2: Create relationships
 POST /api/v1/semantic/cluster           # Step 3: Cluster using community detection
 
@@ -238,26 +260,31 @@ ProcessingJob(folder_id="...", status="queued", total_files=0)
 File(google_drive_id="...", text_content="...", processing_status="processing")
 ```
 
-### 3. Embedding Generation
+### 3. Tag Extraction
 ```python
-# SemanticProcessingService converts text → 384-dim vectors
-from app.services.semantic import SemanticProcessingService
+# TagExtractionService extracts keywords and categorizes documents
+from app.services.tag_extraction import TagExtractionService
 
-service = SemanticProcessingService()
-embeddings = service.generate_embeddings(texts)
-# → numpy array shape (n_docs, 384)
+extractor = TagExtractionService()
+tags = extractor.extract_tags(text)
+# → [(tag_name, category, relevance_score), ...]
+# Example: [("machine", "technology", 0.87), ("learning", "technology", 0.82)]
 ```
+
+Categories detected:
+- `technology`, `finance`, `business`, `human_resources`
+- `legal`, `marketing`, `operations`, `research`
 
 ### 4. Relationship Discovery
 ```python
-# Create relationships based on cosine similarity
+# Create relationships based on shared tags
 relationships, adjacency = service.create_relationships_with_graph(
     session=db,
     files=files,
-    embeddings=embeddings,
-    threshold=0.5,  # Only relationships >= 0.5 similarity
+    min_shared=2,  # Only relationships with >= 2 shared tags
 )
 # Returns: relationships list + adjacency graph for clustering
+# Similarity score = Jaccard similarity = |shared_tags| / |union_tags|
 ```
 
 ### 5. Community-Based Clustering
@@ -269,8 +296,9 @@ clusters = service.create_clusters_from_communities(
     adjacency=adjacency,  # Graph from step 4
 )
 
-# Auto-generate semantic topic names from cluster content
-# Example: "Neural Networks Learning (15 docs)"
+# Auto-generate cluster names from most common tags
+# Example: "Technology & Machine & Learning (15 docs)"
+# Example: "Finance & Budget (8 docs)"
 ```
 
 ### 6. Graph Visualization
@@ -284,15 +312,16 @@ clusters = service.create_clusters_from_communities(
 
 ### Key Algorithm Changes
 
-**Previous (DBSCAN)**: Clustered embeddings directly
-- Problem: Created many small clusters, sensitive to eps parameter
-- Clusters based purely on embedding distance
+**System Migration (2025-10-12)**: From embedding-based to tag-based
+- **Previous**: ML embeddings + cosine similarity (sentence-transformers)
+- **Current**: Keyword extraction + tag matching (NLTK + TF-IDF)
+- **Benefits**: More transparent, explainable, and lightweight
+- **See**: [TAG_SYSTEM_MIGRATION.md](TAG_SYSTEM_MIGRATION.md) for full details
 
-**Current (Community Detection)**: Clusters relationship graph
-- Solution: Uses Louvain algorithm on relationship graph
-- Discovers natural communities based on actual connections
-- More robust, semantically meaningful clusters
-- Threshold: 0.5 (default) creates appropriate sparsity
+**Clustering Algorithm (Community Detection)**: Uses Louvain on relationship graph
+- Discovers natural communities based on tag-based connections
+- More robust and semantically meaningful than distance-based clustering
+- Default: min_shared_tags=2 creates appropriate sparsity
 
 ## Demo & Testing
 
@@ -314,13 +343,13 @@ make demo-custom NUM=250
 
 **Small Demo** (`make demo`):
 - 11 realistic documents (ML papers, financial reports, meeting notes, HR docs)
-- ~35-40 relationships (threshold: 0.3)
-- 4-5 clusters with auto-generated names like "Learning & Neural", "Financial & Budget"
-- 0-2 outliers (documents that don't fit any cluster)
+- Relationships based on shared tags (min_shared_tags: 2)
+- 4-5 clusters with auto-generated names like "Technology & Machine & Learning", "Finance & Budget"
+- 0-2 outliers (documents that don't share enough tags with others)
 
 **Large-Scale Demo** (`make demo-large`):
 - 100 synthetic documents across 8 topic areas
-- Performance metrics: embedding speed, database insertion, relationship creation
+- Performance metrics: tag extraction speed, database insertion, relationship creation
 - Clustering analysis: discovers 5-10 semantic clusters
 - Memory usage tracking
 - Scalability projections for larger datasets (500-10,000 docs)
@@ -349,10 +378,11 @@ docker exec ai-rel-graph-postgres psql -U postgres -d semantic_graph_test -c "CR
 
 **Test Coverage**:
 - 35+ model tests validating constraints, indexes, and CASCADE deletes
-- 40+ semantic service tests for embeddings, relationships, and clustering
-- Tests use real PostgreSQL with pgvector (not SQLite)
-- Validates vector embeddings, similarity bounds, community detection
+- 40+ service tests for tag extraction, relationships, and clustering
+- Tests use real PostgreSQL (no longer requires pgvector extension)
+- Validates tag extraction quality, shared tag counting, community detection
 - Tests located in [backend/tests/](backend/tests/)
+- **Note**: Tests need updating after tag-based migration
 
 ### Visualize Results
 
@@ -424,9 +454,10 @@ CELERY_RESULT_BACKEND=redis://redis:6379/0
 GOOGLE_CLIENT_ID=your_client_id
 GOOGLE_CLIENT_SECRET=your_client_secret
 
-SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
-EMBEDDING_DIMENSION=384
-SIMILARITY_THRESHOLD=0.7  # Higher threshold = fewer, stronger connections
+# Tag extraction parameters (optional, have defaults)
+MIN_SHARED_TAGS=2           # Minimum shared tags for relationships (default: 2)
+MIN_TAG_FREQUENCY=2         # Minimum word frequency for tag extraction (default: 2)
+MAX_TAGS_PER_DOC=10         # Maximum tags per document (default: 10)
 ```
 
 **Frontend** (`frontend/.env.local`):
@@ -447,11 +478,16 @@ make db-upgrade  # Applies migration
 ### Celery Tasks
 Tasks are defined in [app/workers/tasks.py](backend/app/workers/tasks.py) and must be imported in `app/core/celery_app.py` include list. The Celery worker runs in a separate Docker container.
 
-**Available Semantic Processing Tasks**:
-- `process_files_semantically`: Full pipeline (embeddings + relationships + clustering)
-- `generate_embeddings`: Step 1 - Generate embeddings for files
-- `create_semantic_relationships`: Step 2 - Create relationships from embeddings
+**Available Tag-Based Processing Tasks**:
+- `process_files_with_tags`: Full pipeline (tag extraction + relationships + clustering)
+- `extract_tags_task`: Step 1 - Extract tags from files
+- `create_tag_relationships`: Step 2 - Create relationships based on shared tags
 - `cluster_documents`: Step 3 - Cluster files using community detection
+
+**Deprecated Tasks** (for backward compatibility):
+- `process_files_semantically` → redirects to `process_files_with_tags`
+- `generate_embeddings` → redirects to `extract_tags_task`
+- `create_semantic_relationships` → redirects to `create_tag_relationships`
 
 All tasks support:
 - Automatic retry on failure (max 3 retries)
@@ -461,10 +497,10 @@ All tasks support:
 ### API Development
 API endpoints go in `app/api/v1/`. The main FastAPI app is in `app/main.py`. CORS is configured to allow origins from ALLOWED_ORIGINS in settings.
 
-**Semantic Processing Endpoints** ([app/api/v1/semantic.py](backend/app/api/v1/semantic.py)):
-- `POST /api/v1/semantic/process` - Full semantic pipeline (async)
-- `POST /api/v1/semantic/embeddings` - Generate embeddings only
-- `POST /api/v1/semantic/relationships` - Create relationships only
+**Tag-Based Processing Endpoints** ([app/api/v1/semantic.py](backend/app/api/v1/semantic.py)):
+- `POST /api/v1/semantic/process` - Full tag-based pipeline (async)
+- `POST /api/v1/semantic/tags` - Extract tags only
+- `POST /api/v1/semantic/relationships` - Create relationships based on shared tags
 - `POST /api/v1/semantic/cluster` - Cluster documents only
 - `GET /api/v1/semantic/task/{task_id}` - Check async task status
 
@@ -473,22 +509,17 @@ All endpoints validate input, return task IDs for monitoring, and provide detail
 ### Frontend Routing
 Next.js App Router: pages are in `frontend/src/app/` with route structure based on directory names (e.g., `app/graph/page.tsx` → `/graph`).
 
-### pgvector Setup
-The pgvector extension must be enabled in PostgreSQL:
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-This is automatically done in migrations and test setup. Vector columns use `VECTOR(384)` type with ivfflat index for performance.
+### Database Setup
+PostgreSQL is used for structured data storage. No special extensions required (pgvector was removed in tag-based migration).
 
 ### Clustering Algorithm
 Community detection (Louvain algorithm) is used for automatic cluster discovery:
-- **Input**: Relationship graph (not raw embeddings)
+- **Input**: Relationship graph based on shared tags
 - **Algorithm**: Louvain community detection via NetworkX
 - **Fallback**: Connected components if NetworkX unavailable
 - **Resolution**: 1.0 (standard modularity optimization)
 
-The algorithm discovers natural communities in the relationship graph, producing semantically meaningful clusters. Unlike DBSCAN, it doesn't require tuning distance parameters.
+The algorithm discovers natural communities in the tag-based relationship graph, producing semantically meaningful clusters based on shared topics and categories.
 
 ## Package Management
 

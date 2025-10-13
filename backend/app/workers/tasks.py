@@ -1,4 +1,4 @@
-"""Celery tasks."""
+"""Celery tasks for tag-based processing."""
 from typing import List, Dict, Optional
 import uuid
 from datetime import datetime
@@ -17,30 +17,30 @@ def test_task(x: int, y: int) -> int:
 
 
 @celery_app.task(
-    name="app.workers.tasks.process_files_semantically",
+    name="app.workers.tasks.process_files_with_tags",
     bind=True,
     max_retries=3,
     default_retry_delay=60,
 )
-def process_files_semantically(
+def process_files_with_tags(
     self,
     file_ids: List[str],
     job_id: Optional[str] = None,
-    similarity_threshold: float = 0.5,
+    min_shared_tags: int = 2,
 ) -> Dict:
     """
-    Process files through semantic pipeline: embeddings, relationships, clustering.
+    Process files through tag-based pipeline: tag extraction, relationships, clustering.
 
     Args:
         file_ids: List of file IDs to process
         job_id: Optional processing job ID for tracking
-        similarity_threshold: Minimum similarity for creating relationships
+        min_shared_tags: Minimum number of shared tags for creating relationships
 
     Returns:
         Dictionary with processing results and statistics
     """
     db = SessionLocal()
-    service = SemanticProcessingService(similarity_threshold=similarity_threshold)
+    service = SemanticProcessingService(min_shared_tags=min_shared_tags)
 
     try:
         # Update job status if provided
@@ -56,12 +56,11 @@ def process_files_semantically(
         if not files:
             raise ValueError("No files found with provided IDs")
 
-        # Run semantic processing
+        # Run tag-based processing
         results = service.process_documents(
             session=db,
             files=files,
-            threshold=similarity_threshold,
-            batch_size=16,
+            min_shared=min_shared_tags,
             show_progress=False,
         )
 
@@ -104,27 +103,32 @@ def process_files_semantically(
 
 
 @celery_app.task(
-    name="app.workers.tasks.generate_embeddings",
+    name="app.workers.tasks.extract_tags_task",
     bind=True,
     max_retries=3,
 )
-def generate_embeddings(
+def extract_tags_task(
     self,
     file_ids: List[str],
-    model_name: str = "all-MiniLM-L6-v2",
+    min_tag_frequency: int = 2,
+    max_tags_per_doc: int = 10,
 ) -> Dict:
     """
-    Generate embeddings for files.
+    Extract tags from files.
 
     Args:
         file_ids: List of file IDs to process
-        model_name: Sentence transformer model name
+        min_tag_frequency: Minimum word frequency for tag extraction
+        max_tags_per_doc: Maximum number of tags per document
 
     Returns:
-        Dictionary with number of processed files
+        Dictionary with number of processed files and tags
     """
     db = SessionLocal()
-    service = SemanticProcessingService(model_name=model_name)
+    service = SemanticProcessingService(
+        min_tag_frequency=min_tag_frequency,
+        max_tags_per_doc=max_tags_per_doc,
+    )
 
     try:
         # Fetch files
@@ -133,20 +137,21 @@ def generate_embeddings(
         if not files:
             raise ValueError("No files found with provided IDs")
 
-        # Generate embeddings
-        texts = [f.text_content for f in files]
-        embeddings = service.generate_embeddings(texts, show_progress=False)
+        # Extract and store tags
+        file_tags_map = service.extract_and_store_tags(
+            session=db,
+            files=files,
+            show_progress=False,
+        )
 
-        # Update files with embeddings
-        for file, embedding in zip(files, embeddings):
-            file.embedding = embedding.tolist()
-            file.processing_status = "completed"
-
-        db.commit()
+        # Count total tags
+        total_tags = sum(len(tags) for tags in file_tags_map.values())
 
         return {
             "status": "completed",
             "num_files": len(files),
+            "total_tags": total_tags,
+            "avg_tags_per_file": total_tags / len(files) if files else 0,
         }
 
     except Exception as e:
@@ -158,53 +163,49 @@ def generate_embeddings(
 
 
 @celery_app.task(
-    name="app.workers.tasks.create_semantic_relationships",
+    name="app.workers.tasks.create_tag_relationships",
     bind=True,
     max_retries=3,
 )
-def create_semantic_relationships(
+def create_tag_relationships(
     self,
     file_ids: List[str],
-    similarity_threshold: float = 0.5,
+    min_shared_tags: int = 2,
 ) -> Dict:
     """
-    Create semantic relationships between files based on embeddings.
+    Create tag-based relationships between files.
 
     Args:
         file_ids: List of file IDs to process
-        similarity_threshold: Minimum similarity for creating relationships
+        min_shared_tags: Minimum number of shared tags
 
     Returns:
         Dictionary with number of relationships created
     """
     db = SessionLocal()
-    service = SemanticProcessingService(similarity_threshold=similarity_threshold)
+    service = SemanticProcessingService(min_shared_tags=min_shared_tags)
 
     try:
-        # Fetch files with embeddings
-        files = db.query(File).filter(
-            File.id.in_(file_ids),
-            File.embedding.isnot(None)
-        ).all()
+        # Fetch files with tags
+        from app.models.file_tag import FileTag
 
-        if not files:
-            raise ValueError("No files found with embeddings")
+        files_with_tags = db.query(File).join(FileTag).filter(
+            File.id.in_(file_ids)
+        ).distinct().all()
 
-        # Extract embeddings
-        import numpy as np
-        embeddings = np.array([f.embedding for f in files])
+        if not files_with_tags:
+            raise ValueError("No files found with tags")
 
         # Create relationships
         relationships, adjacency = service.create_relationships_with_graph(
             session=db,
-            files=files,
-            embeddings=embeddings,
-            threshold=similarity_threshold,
+            files=files_with_tags,
+            min_shared=min_shared_tags,
         )
 
         return {
             "status": "completed",
-            "num_files": len(files),
+            "num_files": len(files_with_tags),
             "num_relationships": len(relationships),
             "avg_degree": sum(len(neighbors) for neighbors in adjacency.values()) / len(adjacency) if adjacency else 0,
         }
@@ -284,3 +285,80 @@ def cluster_documents(
 
     finally:
         db.close()
+
+
+# Keep old task names for backwards compatibility (deprecated)
+@celery_app.task(
+    name="app.workers.tasks.process_files_semantically",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def process_files_semantically(
+    self,
+    file_ids: List[str],
+    job_id: Optional[str] = None,
+    similarity_threshold: float = 0.5,
+) -> Dict:
+    """
+    DEPRECATED: Use process_files_with_tags instead.
+
+    Maintained for backwards compatibility with existing code.
+    Converts embedding-based parameters to tag-based equivalents.
+    """
+    # Convert similarity threshold to min_shared_tags
+    # 0.5 similarity ~= 2 shared tags
+    # 0.3 similarity ~= 1 shared tag
+    # 0.7 similarity ~= 3 shared tags
+    min_shared_tags = max(1, int(similarity_threshold * 4))
+
+    return process_files_with_tags(
+        file_ids=file_ids,
+        job_id=job_id,
+        min_shared_tags=min_shared_tags,
+    )
+
+
+@celery_app.task(
+    name="app.workers.tasks.generate_embeddings",
+    bind=True,
+    max_retries=3,
+)
+def generate_embeddings(
+    self,
+    file_ids: List[str],
+    model_name: str = "all-MiniLM-L6-v2",
+) -> Dict:
+    """
+    DEPRECATED: Use extract_tags_task instead.
+
+    Maintained for backwards compatibility.
+    """
+    return extract_tags_task(
+        file_ids=file_ids,
+        min_tag_frequency=2,
+        max_tags_per_doc=10,
+    )
+
+
+@celery_app.task(
+    name="app.workers.tasks.create_semantic_relationships",
+    bind=True,
+    max_retries=3,
+)
+def create_semantic_relationships(
+    self,
+    file_ids: List[str],
+    similarity_threshold: float = 0.5,
+) -> Dict:
+    """
+    DEPRECATED: Use create_tag_relationships instead.
+
+    Maintained for backwards compatibility.
+    """
+    min_shared_tags = max(1, int(similarity_threshold * 4))
+
+    return create_tag_relationships(
+        file_ids=file_ids,
+        min_shared_tags=min_shared_tags,
+    )

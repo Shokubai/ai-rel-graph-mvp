@@ -206,7 +206,7 @@ demo-large: ## Run demo with 100 synthetic documents
 
 demo-kaggle: ## Run demo with 50 real Kaggle PDFs
 	@echo "$(CYAN)Running demo with 50 Kaggle PDFs...$(NC)"
-	@echo "$(YELLOW)Note: Requires Kaggle API credentials (~/.kaggle/kaggle.json)$(NC)"
+	@echo "$(YELLOW)No credentials needed - downloads public PDFs automatically$(NC)"
 	docker exec ai-rel-graph-backend python demo.py --kaggle 50
 
 demo-kaggle-large: ## Run demo with 500 Kaggle PDFs
@@ -222,11 +222,32 @@ demo-custom: ## Run demo with custom number of Kaggle PDFs (usage: make demo-cus
 	@echo "$(CYAN)Running demo with $(NUM) Kaggle PDFs...$(NC)"
 	docker exec ai-rel-graph-backend python demo.py --kaggle $(NUM)
 
-demo-threshold: ## Run demo with custom threshold (usage: make demo-threshold THRESHOLD=0.6)
-	@if [ -z "$(THRESHOLD)" ]; then \
-		echo "$(RED)Error: THRESHOLD not specified$(NC)"; \
-		echo "Usage: make demo-threshold THRESHOLD=0.6"; \
+demo-min-tags: ## Run demo with custom threshold (usage: make demo-threshold TAGS=0.6)
+	@if [ -z "$(TAGS)" ]; then \
+		echo "$(RED)Error: TAGS not specified$(NC)"; \
+		echo "Usage: make demo-threshold TAGS=0.6"; \
 		exit 1; \
 	fi
-	@echo "$(CYAN)Running demo with threshold $(THRESHOLD)...$(NC)"
-	docker exec ai-rel-graph-backend python demo.py --kaggle 50 --threshold $(THRESHOLD)
+	@echo "$(CYAN)Running demo with threshold $(TAGS)...$(NC)"
+	docker exec ai-rel-graph-backend python demo.py --kaggle 50 --min-tags $(TAGS)
+# === Visualization Commands ===
+
+visualize: ## Visualize graph with spring layout
+	@echo "$(CYAN)Generating spring layout visualization...$(NC)"
+	docker exec ai-rel-graph-backend python visualize_graph.py --layout spring --save graph_spring.png
+	@echo "$(GREEN)✓ Created graph_spring.png$(NC)"
+
+visualize-circular: ## Visualize graph with circular cluster layout
+	@echo "$(CYAN)Generating circular cluster layout...$(NC)"
+	docker exec ai-rel-graph-backend python visualize_graph.py --layout circular --save graph_circular.png
+	@echo "$(GREEN)✓ Created graph_circular.png$(NC)"
+
+visualize-stats: ## Show graph statistics
+	@echo "$(CYAN)Generating statistics visualization...$(NC)"
+	docker exec ai-rel-graph-backend python visualize_graph.py --stats --save graph_stats.png
+	@echo "$(GREEN)✓ Created graph_stats.png$(NC)"
+
+visualize-all: ## Generate all visualizations (spring, circular, stats)
+	@echo "$(CYAN)Generating all visualizations...$(NC)"
+	docker exec ai-rel-graph-backend python visualize_graph.py --all
+	@echo "$(GREEN)✓ Created graph_spring.png, graph_circular.png, graph_stats.png$(NC)"

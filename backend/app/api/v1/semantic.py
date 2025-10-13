@@ -1,4 +1,4 @@
-"""Semantic processing endpoints."""
+"""Tag-based processing endpoints."""
 from typing import List, Optional
 from uuid import UUID
 
@@ -10,9 +10,9 @@ from app.core.database import get_db
 from app.models.file import File
 from app.models.job import ProcessingJob
 from app.workers.tasks import (
-    process_files_semantically,
-    generate_embeddings,
-    create_semantic_relationships,
+    process_files_with_tags,
+    extract_tags_task,
+    create_tag_relationships,
     cluster_documents,
 )
 
@@ -24,7 +24,7 @@ router: APIRouter = APIRouter()
 class ProcessFilesRequest(BaseModel):
     """Request model for processing files."""
     file_ids: List[str] = Field(..., description="List of file IDs to process")
-    similarity_threshold: float = Field(0.5, ge=0.0, le=1.0, description="Similarity threshold")
+    min_shared_tags: int = Field(2, ge=1, description="Minimum number of shared tags to create a relationship")
     create_job: bool = Field(True, description="Whether to create a processing job for tracking")
 
 
@@ -35,16 +35,17 @@ class ProcessFilesResponse(BaseModel):
     message: str
 
 
-class EmbeddingRequest(BaseModel):
-    """Request model for generating embeddings."""
+class TagExtractionRequest(BaseModel):
+    """Request model for extracting tags."""
     file_ids: List[str] = Field(..., description="List of file IDs")
-    model_name: str = Field("all-MiniLM-L6-v2", description="Sentence transformer model")
+    min_tag_frequency: int = Field(2, ge=1, description="Minimum word frequency for tag extraction")
+    max_tags_per_doc: int = Field(10, ge=1, le=50, description="Maximum tags per document")
 
 
 class RelationshipRequest(BaseModel):
     """Request model for creating relationships."""
     file_ids: List[str] = Field(..., description="List of file IDs")
-    similarity_threshold: float = Field(0.5, ge=0.0, le=1.0, description="Similarity threshold")
+    min_shared_tags: int = Field(2, ge=1, description="Minimum number of shared tags")
 
 
 class ClusterRequest(BaseModel):
@@ -65,13 +66,13 @@ async def process_files(
     db: Session = Depends(get_db),
 ) -> ProcessFilesResponse:
     """
-    Process files through full semantic pipeline.
+    Process files through full tag-based pipeline.
 
     This endpoint:
-    1. Generates embeddings for files
-    2. Creates semantic relationships
+    1. Extracts tags from document text
+    2. Creates relationships based on shared tags
     3. Performs community detection clustering
-    4. Names clusters based on content
+    4. Names clusters based on common tags
 
     The process runs asynchronously via Celery.
     """
@@ -103,28 +104,29 @@ async def process_files(
         job_id = str(job.id)
 
     # Start async task
-    task = process_files_semantically.delay(
+    task = process_files_with_tags.delay(
         file_ids=request.file_ids,
         job_id=job_id,
-        similarity_threshold=request.similarity_threshold,
+        min_shared_tags=request.min_shared_tags,
     )
 
     return ProcessFilesResponse(
         task_id=task.id,
         job_id=job_id,
-        message=f"Processing {len(files)} files. Track progress with task_id or job_id.",
+        message=f"Processing {len(files)} files with tag extraction. Track progress with task_id or job_id.",
     )
 
 
-@router.post("/embeddings", response_model=TaskResponse)
-async def create_embeddings(
-    request: EmbeddingRequest,
+@router.post("/tags", response_model=TaskResponse)
+async def extract_tags(
+    request: TagExtractionRequest,
     db: Session = Depends(get_db),
 ) -> TaskResponse:
     """
-    Generate embeddings for files.
+    Extract tags from files.
 
-    This is Step 1 of the semantic pipeline. Files must have text_content.
+    This is Step 1 of the tag-based pipeline. Files must have text_content.
+    Tags are extracted using NLP-based keyword extraction and categorization.
     """
     # Validate files exist and have content
     files = db.query(File).filter(File.id.in_(request.file_ids)).all()
@@ -140,14 +142,15 @@ async def create_embeddings(
         )
 
     # Start async task
-    task = generate_embeddings.delay(
+    task = extract_tags_task.delay(
         file_ids=request.file_ids,
-        model_name=request.model_name,
+        min_tag_frequency=request.min_tag_frequency,
+        max_tags_per_doc=request.max_tags_per_doc,
     )
 
     return TaskResponse(
         task_id=task.id,
-        message=f"Generating embeddings for {len(files)} files.",
+        message=f"Extracting tags from {len(files)} files.",
     )
 
 
@@ -157,38 +160,40 @@ async def create_relationships(
     db: Session = Depends(get_db),
 ) -> TaskResponse:
     """
-    Create semantic relationships between files.
+    Create tag-based relationships between files.
 
-    This is Step 2 of the semantic pipeline. Files must have embeddings.
+    This is Step 2 of the tag-based pipeline. Files must have tags.
+    Relationships are created when files share a minimum number of tags.
     """
-    # Validate files exist and have embeddings
-    files = db.query(File).filter(
-        File.id.in_(request.file_ids),
-        File.embedding.isnot(None)
-    ).all()
+    from app.models.file_tag import FileTag
 
-    if not files:
+    # Validate files exist and have tags
+    files_with_tags = db.query(File).join(FileTag).filter(
+        File.id.in_(request.file_ids)
+    ).distinct().all()
+
+    if not files_with_tags:
         raise HTTPException(
             status_code=404,
-            detail="No files found with embeddings. Generate embeddings first."
+            detail="No files found with tags. Extract tags first."
         )
 
-    if len(files) != len(request.file_ids):
-        missing = len(request.file_ids) - len(files)
+    if len(files_with_tags) != len(request.file_ids):
+        missing = len(request.file_ids) - len(files_with_tags)
         raise HTTPException(
             status_code=400,
-            detail=f"{missing} files missing embeddings. Generate embeddings first."
+            detail=f"{missing} files missing tags. Extract tags first."
         )
 
     # Start async task
-    task = create_semantic_relationships.delay(
+    task = create_tag_relationships.delay(
         file_ids=request.file_ids,
-        similarity_threshold=request.similarity_threshold,
+        min_shared_tags=request.min_shared_tags,
     )
 
     return TaskResponse(
         task_id=task.id,
-        message=f"Creating semantic relationships for {len(files)} files.",
+        message=f"Creating tag-based relationships for {len(files_with_tags)} files.",
     )
 
 
@@ -200,7 +205,8 @@ async def cluster_files(
     """
     Create clusters from existing relationships using community detection.
 
-    This is Step 3 of the semantic pipeline. Files must have relationships.
+    This is Step 3 of the tag-based pipeline. Files must have relationships.
+    Clusters are named based on the most common tags within each community.
     """
     from app.models.relationship import FileRelationship
 
@@ -227,7 +233,7 @@ async def cluster_files(
 
     return TaskResponse(
         task_id=task.id,
-        message=f"Clustering {len(files)} files using community detection.",
+        message=f"Clustering {len(files)} files using community detection on tag relationships.",
     )
 
 

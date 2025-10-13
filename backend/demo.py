@@ -1,14 +1,14 @@
 """
 Unified Demo Script for AIRelGraph.
 
-Demonstrates semantic document processing using SemanticProcessingService.
+Demonstrates tag-based document processing using SemanticProcessingService.
 Supports both synthetic data and real Kaggle PDFs.
 
 Usage:
     python demo.py                          # 11 realistic synthetic documents
     python demo.py --large                  # 100 synthetic documents
     python demo.py --kaggle 50              # 50 real Kaggle PDFs
-    python demo.py --kaggle 50 --threshold 0.6  # Custom threshold
+    python demo.py --kaggle 50 --min-tags 3  # Custom minimum shared tags
 """
 import argparse
 import os
@@ -45,7 +45,7 @@ def setup_database(engine):
     with engine.connect() as conn:
         conn.execute(text("DROP SCHEMA public CASCADE"))
         conn.execute(text("CREATE SCHEMA public"))
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        # No longer need pgvector extension for tag-based system
         conn.commit()
     Base.metadata.create_all(engine)
     print("✅ Database ready\n")
@@ -366,10 +366,12 @@ def print_clusters(clusters_with_files: List, top_n: int = 10):
 
 def main():
     """Run demo."""
-    parser = argparse.ArgumentParser(description="AIRelGraph Semantic Processing Demo")
+    parser = argparse.ArgumentParser(description="AIRelGraph Tag-Based Processing Demo")
     parser.add_argument("--large", action="store_true", help="Generate 100 synthetic documents")
     parser.add_argument("--kaggle", type=int, metavar="N", help="Process N real Kaggle PDFs")
-    parser.add_argument("--threshold", type=float, default=0.5, help="Similarity threshold (default: 0.5)")
+    parser.add_argument("--min-tags", type=int, default=1, help="Minimum shared tags for relationships (default: 2)")
+    # Keep --threshold for backward compatibility but ignore it
+    parser.add_argument("--threshold", type=float, default=0.5, help="(Deprecated: use --min-tags instead)")
 
     args = parser.parse_args()
 
@@ -386,7 +388,7 @@ def main():
 
     print("\n" + "="*80)
     print(f"🚀 AIRelGraph Demo - {data_type}")
-    print(f"   Similarity Threshold: {args.threshold}")
+    print(f"   Minimum Shared Tags: {args.min_tags}")
     print("="*80 + "\n")
 
     tracemalloc.start()
@@ -402,28 +404,29 @@ def main():
         # Create file records
         files = create_files(session, documents)
 
-        # Initialize semantic service
+        # Initialize tag-based processing service
+        min_shared_tags = getattr(args, 'min_tags', 2)
         service = SemanticProcessingService(
-            similarity_threshold=args.threshold,
+            min_shared_tags=min_shared_tags,
         )
 
-        # Measure embedding time
-        print("🧠 Generating embeddings...")
+        # Measure tag extraction time
+        print("🏷️  Extracting tags...")
         start_time = time.time()
         results = service.process_documents(
             session=session,
             files=files,
-            threshold=args.threshold,
+            min_shared=min_shared_tags,
             show_progress=True,
         )
-        embedding_time = time.time() - start_time
+        extraction_time = time.time() - start_time
 
         # Extract timing (approximations since process_documents is combined)
-        # For better accuracy, we measure just the embedding step separately
-        texts = [f.text_content for f in files]
+        # For better accuracy, we measure just the tag extraction step separately
         start_time = time.time()
-        _ = service.generate_embeddings(texts, show_progress=False)
-        embedding_time = time.time() - start_time
+        _ = service.extract_and_store_tags(session, files[:5], show_progress=False)
+        session.rollback()  # Rollback test extraction
+        tag_time = time.time() - start_time
 
         # Approximate relationship and clustering times
         relationship_time = 0.5  # Placeholder
@@ -437,7 +440,7 @@ def main():
         # Print results
         print_summary(
             num_docs=len(documents),
-            embedding_time=embedding_time,
+            embedding_time=tag_time,  # Now represents tag extraction time
             relationship_time=relationship_time,
             clustering_time=clustering_time,
             num_relationships=len(results["relationships"]),

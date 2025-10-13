@@ -1,110 +1,182 @@
 """
-Semantic Processing Service.
+Tag-Based Processing Service.
 
-Provides core semantic analysis functionality:
-- Embedding generation using sentence-transformers
-- Relationship creation based on cosine similarity
-- Community-based clustering using graph algorithms
+Provides core tag-based document analysis functionality:
+- Automated tag extraction from document text
+- Relationship creation based on shared tag count
+- Community-based clustering using tag similarity graph
 - Semantic topic naming for clusters
 """
-import re
 from typing import List, Tuple, Dict, Set, Optional
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.models.file import File
 from app.models.relationship import FileRelationship
 from app.models.cluster import Cluster, FileCluster
+from app.models.tag import Tag
+from app.models.file_tag import FileTag
+from app.services.tag_extraction import TagExtractionService
 
 
 class SemanticProcessingService:
-    """Service for semantic document analysis and clustering."""
+    """Service for tag-based document analysis and clustering."""
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
-        similarity_threshold: float = 0.5,
-        embedding_dimension: int = 384,
+        min_shared_tags: int = 1,  # Lower default for better connectivity
+        min_tag_frequency: int = 1,  # Lower to capture more tags
+        max_tags_per_doc: int = 15,  # Increase to capture more concepts
     ):
         """
-        Initialize the semantic processing service.
+        Initialize the tag-based processing service.
 
         Args:
-            model_name: Sentence transformer model name
-            similarity_threshold: Minimum similarity for creating relationships
-            embedding_dimension: Expected embedding dimension
+            min_shared_tags: Minimum number of shared tags to create a relationship
+            min_tag_frequency: Minimum word frequency for tag extraction
+            max_tags_per_doc: Maximum number of tags to extract per document
         """
-        self.model_name = model_name
-        self.similarity_threshold = similarity_threshold
-        self.embedding_dimension = embedding_dimension
-        self._model: Optional[SentenceTransformer] = None
+        self.min_shared_tags = min_shared_tags
+        self.tag_extractor = TagExtractionService(
+            min_tag_frequency=min_tag_frequency,
+            max_tags_per_doc=max_tags_per_doc,
+        )
 
-    @property
-    def model(self) -> SentenceTransformer:
-        """Lazy-load the sentence transformer model."""
-        if self._model is None:
-            self._model = SentenceTransformer(self.model_name)
-        return self._model
-
-    def generate_embeddings(
-        self, texts: List[str], batch_size: int = 16, show_progress: bool = True
-    ) -> np.ndarray:
+    def extract_and_store_tags(
+        self,
+        session: Session,
+        files: List[File],
+        show_progress: bool = True,
+    ) -> Dict[str, List[Tuple[Tag, float]]]:
         """
-        Generate embeddings for a list of texts.
+        Extract tags from files and store them in database.
 
         Args:
-            texts: List of text strings to embed
-            batch_size: Batch size for encoding
-            show_progress: Whether to show progress bar
+            session: Database session
+            files: List of File objects with text_content
+            show_progress: Whether to show progress updates
 
         Returns:
-            numpy array of embeddings (shape: [len(texts), embedding_dimension])
+            Dictionary mapping file_id to list of (Tag, relevance_score) tuples
         """
-        embeddings = self.model.encode(
-            texts, show_progress_bar=show_progress, batch_size=batch_size
-        )
-        return embeddings
+        file_tags_map = {}
+
+        for idx, file in enumerate(files):
+            if show_progress and (idx % 10 == 0 or idx == len(files) - 1):
+                print(f"Extracting tags: {idx + 1}/{len(files)}")
+
+            # Extract tags from text
+            extracted_tags = self.tag_extractor.extract_tags(file.text_content or "")
+
+            if not extracted_tags:
+                file.processing_status = "completed"
+                continue
+
+            # Store tags in database
+            file_tag_objects = []
+            seen_tags = set()  # Track tags already added for this file
+
+            for tag_name, category, relevance_score in extracted_tags:
+                # Skip if we've already added this tag for this file
+                if tag_name in seen_tags:
+                    continue
+                seen_tags.add(tag_name)
+
+                # Get or create tag
+                tag = session.query(Tag).filter(Tag.name == tag_name).first()
+
+                if not tag:
+                    tag = Tag(name=tag_name, category=category, usage_count=0)
+                    session.add(tag)
+                    session.flush()
+
+                # Check if file-tag association already exists
+                existing = session.query(FileTag).filter(
+                    FileTag.file_id == file.id,
+                    FileTag.tag_id == tag.id
+                ).first()
+
+                if existing:
+                    # Update relevance score if this one is higher
+                    if relevance_score > existing.relevance_score:
+                        existing.relevance_score = relevance_score
+                    file_tag_objects.append((tag, existing.relevance_score))
+                else:
+                    # Increment usage count
+                    tag.usage_count += 1
+
+                    # Create file-tag association
+                    file_tag = FileTag(
+                        file_id=file.id,
+                        tag_id=tag.id,
+                        relevance_score=relevance_score,
+                    )
+                    session.add(file_tag)
+                    file_tag_objects.append((tag, relevance_score))
+
+            file_tags_map[str(file.id)] = file_tag_objects
+            file.processing_status = "completed"
+
+        session.commit()
+        return file_tags_map
 
     def create_relationships_with_graph(
         self,
         session: Session,
         files: List[File],
-        embeddings: np.ndarray,
-        threshold: Optional[float] = None,
+        min_shared: Optional[int] = None,
     ) -> Tuple[List[FileRelationship], Dict[int, Set[int]]]:
         """
-        Create semantic relationships and build adjacency graph.
+        Create tag-based relationships and build adjacency graph.
 
         Args:
             session: Database session
             files: List of File objects
-            embeddings: numpy array of embeddings
-            threshold: Similarity threshold (uses instance default if None)
+            min_shared: Minimum shared tags (uses instance default if None)
 
         Returns:
             Tuple of (relationships list, adjacency dict)
         """
-        if threshold is None:
-            threshold = self.similarity_threshold
+        if min_shared is None:
+            min_shared = self.min_shared_tags
 
-        # Compute similarity matrix
-        similarity_matrix = cosine_similarity(embeddings)
+        # Build tag sets for each file
+        file_tag_sets: Dict[str, Set[str]] = {}
+
+        for file in files:
+            # Query tags for this file
+            file_tags = (
+                session.query(Tag)
+                .join(FileTag)
+                .filter(FileTag.file_id == file.id)
+                .all()
+            )
+            file_tag_sets[str(file.id)] = {tag.name for tag in file_tags}
 
         relationships = []
         adjacency: Dict[int, Set[int]] = {i: set() for i in range(len(files))}
 
-        # Create relationships above threshold
+        # Create relationships based on shared tags
         for i in range(len(files)):
             for j in range(i + 1, len(files)):
-                similarity = similarity_matrix[i][j]
-                if similarity >= threshold:
+                file_i_tags = file_tag_sets[str(files[i].id)]
+                file_j_tags = file_tag_sets[str(files[j].id)]
+
+                # Count shared tags
+                shared_tags = file_i_tags & file_j_tags
+                shared_count = len(shared_tags)
+
+                if shared_count >= min_shared:
+                    # Calculate normalized similarity score (Jaccard similarity)
+                    union_tags = file_i_tags | file_j_tags
+                    similarity_score = shared_count / len(union_tags) if union_tags else 0.0
+
                     rel = FileRelationship(
                         source_file_id=files[i].id,
                         target_file_id=files[j].id,
-                        similarity_score=float(similarity),
-                        relationship_type="semantic_similarity",
+                        shared_tag_count=shared_count,
+                        similarity_score=float(similarity_score),
+                        relationship_type="tag_similarity",
                     )
                     relationships.append(rel)
                     session.add(rel)
@@ -188,125 +260,76 @@ class SemanticProcessingService:
 
         return labels
 
-    def generate_semantic_topic_name(
-        self, cluster_files: List[File], max_docs: int = 5
+    def generate_cluster_name_from_tags(
+        self, session: Session, cluster_files: List[File], max_tags: int = 3
     ) -> str:
         """
-        Generate a semantic topic name for a cluster.
-
-        Strategy:
-        1. Extract sentences from documents
-        2. Find most central sentence using embedding similarity
-        3. Extract key phrases to create topic name
+        Generate a cluster name based on most common tags.
 
         Args:
+            session: Database session
             cluster_files: List of files in the cluster
-            max_docs: Maximum number of documents to analyze
+            max_tags: Maximum number of tags to include in name
 
         Returns:
-            Generated topic name
+            Generated cluster name
         """
         try:
-            # Collect sentences from documents
-            all_sentences = []
-            for file in cluster_files[:max_docs]:
-                if not file.text_content:
-                    continue
+            # Collect all tags from cluster files
+            tag_counts: Dict[str, int] = {}
+            category_counts: Dict[str, int] = {}
 
-                # Split into sentences (simple approach)
-                text = file.text_content[:2000]  # First 2K chars
-                sentences = [s.strip() for s in text.split(".") if len(s.strip()) > 30]
-                all_sentences.extend(sentences[:10])  # Up to 10 sentences per doc
+            file_ids = [f.id for f in cluster_files]
 
-            if len(all_sentences) < 3:
-                return f"Document Cluster ({len(cluster_files)} docs)"
-
-            # Encode sentences
-            sentence_embeddings = self.model.encode(
-                all_sentences, show_progress_bar=False
+            # Query all tags for cluster files
+            cluster_tags = (
+                session.query(Tag, func.count(FileTag.file_id).label("count"))
+                .join(FileTag)
+                .filter(FileTag.file_id.in_(file_ids))
+                .group_by(Tag.id)
+                .order_by(func.count(FileTag.file_id).desc())
+                .limit(10)
+                .all()
             )
 
-            # Find most central sentence (closest to centroid)
-            centroid = np.mean(sentence_embeddings, axis=0)
-            similarities = cosine_similarity([centroid], sentence_embeddings)[0]
-            most_central_idx = np.argmax(similarities)
-            central_sentence = all_sentences[most_central_idx]
+            if not cluster_tags:
+                return f"Document Cluster ({len(cluster_files)} docs)"
 
-            # Extract key phrases from central sentence
-            central_sentence = re.sub(r"\d+", "", central_sentence)  # Remove numbers
-            central_sentence = re.sub(
-                r"[^\w\s]", " ", central_sentence
-            )  # Remove punctuation
+            # Count tags and categories
+            for tag, count in cluster_tags:
+                tag_counts[tag.name] = count
+                if tag.category:
+                    category_counts[tag.category] = category_counts.get(tag.category, 0) + count
 
-            words = central_sentence.split()
+            # Find dominant category
+            dominant_category = None
+            if category_counts:
+                dominant_category = max(category_counts.items(), key=lambda x: x[1])[0]
 
-            # Filter stopwords and short words
-            stopwords = {
-                "the",
-                "a",
-                "an",
-                "and",
-                "or",
-                "but",
-                "in",
-                "on",
-                "at",
-                "to",
-                "for",
-                "of",
-                "with",
-                "by",
-                "from",
-                "is",
-                "are",
-                "was",
-                "were",
-                "been",
-                "be",
-                "have",
-                "has",
-                "had",
-                "do",
-                "does",
-                "did",
-                "will",
-                "would",
-                "should",
-                "can",
-                "could",
-                "may",
-                "might",
-                "must",
-                "this",
-                "that",
-                "these",
-                "those",
-            }
+            # Get top tags (prefer tags from dominant category)
+            top_tags = []
+            for tag, count in cluster_tags:
+                if len(top_tags) >= max_tags:
+                    break
 
-            meaningful_words = [
-                w for w in words if len(w) > 3 and w.lower() not in stopwords
-            ]
+                # Prefer tags from dominant category or general tags
+                if not dominant_category or tag.category == dominant_category or tag.category == "general":
+                    top_tags.append(tag.name.capitalize())
 
-            if len(meaningful_words) >= 3:
-                # Take first 3-4 meaningful words as topic
-                topic_words = meaningful_words[:4]
-                topic = " ".join([w.capitalize() for w in topic_words])
+            if not top_tags:
+                top_tags = [tag.name.capitalize() for tag, _ in cluster_tags[:max_tags]]
 
-                # Limit length
-                if len(topic) > 50:
-                    topic = topic[:47] + "..."
-
-                return f"{topic} ({len(cluster_files)} docs)"
-            else:
-                # Fallback to first few words of central sentence
-                words_to_use = [w.capitalize() for w in words[:4] if len(w) > 2]
-                if words_to_use:
-                    return f"{' '.join(words_to_use[:3])} ({len(cluster_files)} docs)"
+            # Build cluster name
+            if top_tags:
+                tag_str = " & ".join(top_tags[:max_tags])
+                if len(tag_str) > 50:
+                    tag_str = tag_str[:47] + "..."
+                return f"{tag_str} ({len(cluster_files)} docs)"
 
             return f"Document Cluster ({len(cluster_files)} docs)"
 
         except Exception as e:
-            print(f"Warning: Topic naming failed: {e}")
+            print(f"Warning: Cluster naming failed: {e}")
             return f"Document Cluster ({len(cluster_files)} docs)"
 
     def create_clusters_from_communities(
@@ -339,8 +362,8 @@ class SemanticProcessingService:
             cluster_indices = [i for i, label in enumerate(labels) if label == cluster_id]
             cluster_files = [files[i] for i in cluster_indices]
 
-            # Generate semantic topic name
-            cluster_label = self.generate_semantic_topic_name(cluster_files)
+            # Generate cluster name from tags
+            cluster_label = self.generate_cluster_name_from_tags(session, cluster_files)
 
             # Create cluster
             cluster = Cluster(label=cluster_label)
@@ -361,51 +384,54 @@ class SemanticProcessingService:
         self,
         session: Session,
         files: List[File],
-        threshold: Optional[float] = None,
-        batch_size: int = 16,
+        min_shared: Optional[int] = None,
         show_progress: bool = True,
     ) -> Dict[str, any]:
         """
-        Full semantic processing pipeline for documents.
+        Full tag-based processing pipeline for documents.
 
         Args:
             session: Database session
             files: List of File objects (must have text_content)
-            threshold: Similarity threshold (uses instance default if None)
-            batch_size: Batch size for embedding generation
-            show_progress: Whether to show progress bars
+            min_shared: Minimum shared tags for relationships (uses instance default if None)
+            show_progress: Whether to show progress updates
 
         Returns:
             Dictionary with processing results:
-            - embeddings: numpy array
+            - file_tags: dict mapping file_id to list of (Tag, relevance) tuples
             - relationships: list of FileRelationship objects
             - clusters: list of (Cluster, files) tuples
             - adjacency: adjacency graph dict
         """
-        # Step 1: Generate embeddings
-        texts = [f.text_content for f in files]
-        embeddings = self.generate_embeddings(
-            texts, batch_size=batch_size, show_progress=show_progress
-        )
+        # Step 1: Extract and store tags
+        if show_progress:
+            print("Step 1: Extracting tags from documents...")
 
-        # Step 2: Update files with embeddings
-        for file, embedding in zip(files, embeddings):
-            file.embedding = embedding.tolist()
-            file.processing_status = "completed"
-        session.commit()
+        file_tags = self.extract_and_store_tags(session, files, show_progress=show_progress)
 
-        # Step 3: Create relationships and build graph
+        # Step 2: Create relationships based on shared tags
+        if show_progress:
+            print("Step 2: Creating relationships based on shared tags...")
+
         relationships, adjacency = self.create_relationships_with_graph(
-            session, files, embeddings, threshold=threshold
+            session, files, min_shared=min_shared
         )
 
-        # Step 4: Create clusters using community detection
+        # Step 3: Create clusters using community detection
+        if show_progress:
+            print("Step 3: Clustering documents by tag similarity...")
+
         clusters_with_files = self.create_clusters_from_communities(
             session, files, adjacency
         )
 
+        if show_progress:
+            print(f"✓ Processed {len(files)} documents")
+            print(f"✓ Created {len(relationships)} relationships")
+            print(f"✓ Discovered {len(clusters_with_files)} clusters")
+
         return {
-            "embeddings": embeddings,
+            "file_tags": file_tags,
             "relationships": relationships,
             "clusters": clusters_with_files,
             "adjacency": adjacency,
