@@ -16,7 +16,7 @@ from app.main import app
 # When running locally, connect to 'localhost'
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
-    "postgresql://postgres:postgres@postgres:5432/semantic_graph_test"
+    "postgresql://postgres:postgres@localhost:5432/semantic_graph_test"
 )
 
 engine = create_engine(TEST_DATABASE_URL)

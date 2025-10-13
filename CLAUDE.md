@@ -43,8 +43,9 @@ Unlike folder hierarchies or keyword search, this reveals **hidden patterns** in
 **Core modules**:
 - `app/core/`: Configuration, database setup, Celery app
 - `app/models/`: SQLAlchemy models with pgvector support
-- `app/api/v1/`: API endpoints
-- `app/workers/`: Celery tasks for document processing
+- `app/api/v1/`: API endpoints (files, semantic processing)
+- `app/services/`: Business logic services (SemanticProcessingService)
+- `app/workers/`: Celery tasks for async document processing
 
 ### Frontend (`frontend/`)
 - **Framework**: Next.js 15 with App Router (not Pages Router)
@@ -173,6 +174,58 @@ completed_at         TIMESTAMP
 
 ## Semantic Pipeline
 
+The semantic processing pipeline is implemented in [app/services/semantic.py](backend/app/services/semantic.py) as `SemanticProcessingService`. This service can be used directly or via Celery tasks for async processing.
+
+### Using the Semantic Service
+
+**Direct Usage (Synchronous)**:
+```python
+from app.services.semantic import SemanticProcessingService
+from app.core.database import SessionLocal
+
+# Initialize service
+service = SemanticProcessingService(
+    model_name="all-MiniLM-L6-v2",
+    similarity_threshold=0.5,
+)
+
+# Process documents through full pipeline
+db = SessionLocal()
+results = service.process_documents(
+    session=db,
+    files=files,  # List of File objects with text_content
+    threshold=0.5,
+    show_progress=True,
+)
+
+# Results contain:
+# - embeddings: numpy array of embeddings
+# - relationships: list of FileRelationship objects
+# - clusters: list of (Cluster, files) tuples
+# - adjacency: graph adjacency dict
+```
+
+**API Usage (Asynchronous via Celery)**:
+```bash
+# Full pipeline: embeddings + relationships + clustering
+POST /api/v1/semantic/process
+{
+  "file_ids": ["uuid1", "uuid2", ...],
+  "similarity_threshold": 0.5,
+  "create_job": true
+}
+
+# Step-by-step processing
+POST /api/v1/semantic/embeddings        # Step 1: Generate embeddings
+POST /api/v1/semantic/relationships     # Step 2: Create relationships
+POST /api/v1/semantic/cluster           # Step 3: Cluster using community detection
+
+# Check task status
+GET /api/v1/semantic/task/{task_id}
+```
+
+### Pipeline Steps
+
 ### 1. Document Ingestion
 ```python
 # User provides Google Drive folder → Celery job created
@@ -187,40 +240,37 @@ File(google_drive_id="...", text_content="...", processing_status="processing")
 
 ### 3. Embedding Generation
 ```python
-# sentence-transformers converts text → 384-dim vector
-from sentence_transformers import SentenceTransformer
-model = SentenceTransformer('all-MiniLM-L6-v2')
-embedding = model.encode(text)  # → [0.234, -0.567, ...]
+# SemanticProcessingService converts text → 384-dim vectors
+from app.services.semantic import SemanticProcessingService
 
-File.embedding = embedding.tolist()
+service = SemanticProcessingService()
+embeddings = service.generate_embeddings(texts)
+# → numpy array shape (n_docs, 384)
 ```
 
 ### 4. Relationship Discovery
 ```python
-# Compute cosine similarity between all document pairs
-from sklearn.metrics.pairwise import cosine_similarity
-similarity_matrix = cosine_similarity(embeddings)
-
-# Create relationships above threshold (e.g., 0.3)
-if similarity >= 0.3:
-    FileRelationship(
-        source_file_id=file1.id,
-        target_file_id=file2.id,
-        similarity_score=similarity
-    )
+# Create relationships based on cosine similarity
+relationships, adjacency = service.create_relationships_with_graph(
+    session=db,
+    files=files,
+    embeddings=embeddings,
+    threshold=0.5,  # Only relationships >= 0.5 similarity
+)
+# Returns: relationships list + adjacency graph for clustering
 ```
 
-### 5. Automatic Clustering
+### 5. Community-Based Clustering
 ```python
-# DBSCAN discovers clusters from embeddings
-from sklearn.cluster import DBSCAN
-dbscan = DBSCAN(eps=0.5, min_samples=2, metric='cosine')
-cluster_labels = dbscan.fit_predict(embeddings)
+# Use Louvain algorithm to find natural communities in relationship graph
+clusters = service.create_clusters_from_communities(
+    session=db,
+    files=files,
+    adjacency=adjacency,  # Graph from step 4
+)
 
-# Auto-generate cluster names from content
-def generate_cluster_name(cluster_files):
-    # Extract most common words from all files
-    # Return "Learning & Neural", "Financial & Budget", etc.
+# Auto-generate semantic topic names from cluster content
+# Example: "Neural Networks Learning (15 docs)"
 ```
 
 ### 6. Graph Visualization
@@ -228,21 +278,61 @@ def generate_cluster_name(cluster_files):
 # Frontend receives:
 # - Nodes: files with metadata
 # - Edges: relationships with similarity scores
-# - Clusters: groupings with labels
+# - Clusters: communities with semantic labels
 # react-force-graph renders interactive visualization
 ```
 
+### Key Algorithm Changes
+
+**Previous (DBSCAN)**: Clustered embeddings directly
+- Problem: Created many small clusters, sensitive to eps parameter
+- Clusters based purely on embedding distance
+
+**Current (Community Detection)**: Clusters relationship graph
+- Solution: Uses Louvain algorithm on relationship graph
+- Discovers natural communities based on actual connections
+- More robust, semantically meaningful clusters
+- Threshold: 0.5 (default) creates appropriate sparsity
+
 ## Demo & Testing
 
-### Run Schema Demo
+### Run Demos
+
 ```bash
-./RUN_DEMO.sh
+# Small demo (11 realistic documents)
+make demo
+
+# Large-scale demo (100 documents)
+make demo-large
+
+# Full scaling tests (50, 100, 250, 500 documents)
+make demo-scale
+
+# Custom size (e.g., 250 documents)
+make demo-custom NUM=250
 ```
 
-Creates 11 realistic documents, generates embeddings, discovers relationships and clusters:
-- **~35-40 relationships** (threshold: 0.3)
-- **4-5 clusters** with auto-generated names like "Learning & Neural", "Financial & Budget"
-- **0-2 outliers** (documents that don't fit any cluster)
+**Small Demo** (`make demo`):
+- 11 realistic documents (ML papers, financial reports, meeting notes, HR docs)
+- ~35-40 relationships (threshold: 0.3)
+- 4-5 clusters with auto-generated names like "Learning & Neural", "Financial & Budget"
+- 0-2 outliers (documents that don't fit any cluster)
+
+**Large-Scale Demo** (`make demo-large`):
+- 100 synthetic documents across 8 topic areas
+- Performance metrics: embedding speed, database insertion, relationship creation
+- Clustering analysis: discovers 5-10 semantic clusters
+- Memory usage tracking
+- Scalability projections for larger datasets (500-10,000 docs)
+
+**Kaggle PDF Demo** (`make demo-kaggle`):
+- Uses real PDF documents from Kaggle dataset
+- Extracts text from actual PDFs (not synthetic)
+- Tests system with real-world document formats
+- Validates text extraction and clustering quality
+- Requires Kaggle API credentials: `~/.kaggle/kaggle.json`
+- Get credentials from [kaggle.com/settings](https://www.kaggle.com/settings)
+- Accept [dataset terms](https://www.kaggle.com/datasets/manisha717/dataset-of-pdf-files)
 
 ### Run Tests
 ```bash
@@ -258,11 +348,49 @@ docker exec ai-rel-graph-postgres psql -U postgres -d semantic_graph_test -c "CR
 ```
 
 **Test Coverage**:
-- 35+ tests validating models, constraints, indexes, and CASCADE deletes
+- 35+ model tests validating constraints, indexes, and CASCADE deletes
+- 40+ semantic service tests for embeddings, relationships, and clustering
 - Tests use real PostgreSQL with pgvector (not SQLite)
-- Validates vector embeddings, similarity bounds, cluster discovery
+- Validates vector embeddings, similarity bounds, community detection
+- Tests located in [backend/tests/](backend/tests/)
+
+### Visualize Results
+
+After running a demo, visualize the semantic graph using [visualize_graph.py](backend/visualize_graph.py):
+
+```bash
+# Interactive visualization (spring layout)
+make visualize
+
+# Circular cluster layout
+make visualize-circular
+
+# Cluster statistics
+make visualize-stats
+
+# Save to file
+make visualize-save FILE=my_graph.png
+
+# Generate all visualizations
+make visualize-all  # Creates graph_spring.png, graph_circular.png, graph_stats.png
+```
+
+**What you'll see**:
+- **Nodes**: Documents sized by connection count
+- **Edges**: Relationships with thickness = similarity strength
+- **Colors**: Each community/cluster has distinct color
+- **Legend**: Cluster names with document counts
+
+**Layout Options**:
+- **Spring Layout**: Force-directed positioning shows natural relationships
+- **Circular Layout**: Groups clusters in circles for clear visual separation
+
+**Statistics View**:
+- Documents per cluster (horizontal bar chart)
+- Relationship distribution (within vs between clusters)
 
 ### Database Exploration
+
 ```bash
 # Connect to database
 docker exec -it ai-rel-graph-postgres psql -U postgres -d semantic_graph_demo
@@ -298,7 +426,7 @@ GOOGLE_CLIENT_SECRET=your_client_secret
 
 SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
 EMBEDDING_DIMENSION=384
-SIMILARITY_THRESHOLD=0.3
+SIMILARITY_THRESHOLD=0.7  # Higher threshold = fewer, stronger connections
 ```
 
 **Frontend** (`frontend/.env.local`):
@@ -317,10 +445,30 @@ make db-upgrade  # Applies migration
 ```
 
 ### Celery Tasks
-Tasks are defined in `app/workers/tasks.py` and must be imported in `app/core/celery_app.py` include list. The Celery worker runs in a separate Docker container.
+Tasks are defined in [app/workers/tasks.py](backend/app/workers/tasks.py) and must be imported in `app/core/celery_app.py` include list. The Celery worker runs in a separate Docker container.
+
+**Available Semantic Processing Tasks**:
+- `process_files_semantically`: Full pipeline (embeddings + relationships + clustering)
+- `generate_embeddings`: Step 1 - Generate embeddings for files
+- `create_semantic_relationships`: Step 2 - Create relationships from embeddings
+- `cluster_documents`: Step 3 - Cluster files using community detection
+
+All tasks support:
+- Automatic retry on failure (max 3 retries)
+- Integration with ProcessingJob for progress tracking
+- Rollback on error to maintain database consistency
 
 ### API Development
 API endpoints go in `app/api/v1/`. The main FastAPI app is in `app/main.py`. CORS is configured to allow origins from ALLOWED_ORIGINS in settings.
+
+**Semantic Processing Endpoints** ([app/api/v1/semantic.py](backend/app/api/v1/semantic.py)):
+- `POST /api/v1/semantic/process` - Full semantic pipeline (async)
+- `POST /api/v1/semantic/embeddings` - Generate embeddings only
+- `POST /api/v1/semantic/relationships` - Create relationships only
+- `POST /api/v1/semantic/cluster` - Cluster documents only
+- `GET /api/v1/semantic/task/{task_id}` - Check async task status
+
+All endpoints validate input, return task IDs for monitoring, and provide detailed error messages.
 
 ### Frontend Routing
 Next.js App Router: pages are in `frontend/src/app/` with route structure based on directory names (e.g., `app/graph/page.tsx` → `/graph`).
@@ -334,12 +482,13 @@ CREATE EXTENSION IF NOT EXISTS vector;
 This is automatically done in migrations and test setup. Vector columns use `VECTOR(384)` type with ivfflat index for performance.
 
 ### Clustering Algorithm
-DBSCAN is used for automatic cluster discovery:
-- **eps=0.5**: Maximum cosine distance between neighbors
-- **min_samples=2**: Minimum documents to form cluster
-- **metric='cosine'**: Semantic similarity measure
+Community detection (Louvain algorithm) is used for automatic cluster discovery:
+- **Input**: Relationship graph (not raw embeddings)
+- **Algorithm**: Louvain community detection via NetworkX
+- **Fallback**: Connected components if NetworkX unavailable
+- **Resolution**: 1.0 (standard modularity optimization)
 
-Adjust `eps` to control cluster tightness (lower = stricter, more outliers).
+The algorithm discovers natural communities in the relationship graph, producing semantically meaningful clusters. Unlike DBSCAN, it doesn't require tuning distance parameters.
 
 ## Package Management
 

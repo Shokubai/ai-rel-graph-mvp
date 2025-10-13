@@ -193,3 +193,40 @@ urls: ## Show all service URLs
 	@echo "  API Docs:        $(GREEN)http://localhost:8000/docs$(NC)"
 	@echo "  PostgreSQL:      $(GREEN)localhost:5432$(NC)"
 	@echo "  Redis:           $(GREEN)localhost:6379$(NC)"
+
+# === Demo Commands ===
+
+demo: ## Run demo with 11 realistic documents
+	@echo "$(CYAN)Running demo with 11 realistic documents...$(NC)"
+	docker exec ai-rel-graph-backend python demo.py
+
+demo-large: ## Run demo with 100 synthetic documents
+	@echo "$(CYAN)Running demo with 100 synthetic documents...$(NC)"
+	docker exec ai-rel-graph-backend python demo.py --large
+
+demo-kaggle: ## Run demo with 50 real Kaggle PDFs
+	@echo "$(CYAN)Running demo with 50 Kaggle PDFs...$(NC)"
+	@echo "$(YELLOW)Note: Requires Kaggle API credentials (~/.kaggle/kaggle.json)$(NC)"
+	docker exec ai-rel-graph-backend python demo.py --kaggle 50
+
+demo-kaggle-large: ## Run demo with 500 Kaggle PDFs
+	@echo "$(CYAN)Running demo with 500 Kaggle PDFs...$(NC)"
+	docker exec ai-rel-graph-backend python demo.py --kaggle 500
+
+demo-custom: ## Run demo with custom number of Kaggle PDFs (usage: make demo-custom NUM=75)
+	@if [ -z "$(NUM)" ]; then \
+		echo "$(RED)Error: NUM not specified$(NC)"; \
+		echo "Usage: make demo-custom NUM=75"; \
+		exit 1; \
+	fi
+	@echo "$(CYAN)Running demo with $(NUM) Kaggle PDFs...$(NC)"
+	docker exec ai-rel-graph-backend python demo.py --kaggle $(NUM)
+
+demo-threshold: ## Run demo with custom threshold (usage: make demo-threshold THRESHOLD=0.6)
+	@if [ -z "$(THRESHOLD)" ]; then \
+		echo "$(RED)Error: THRESHOLD not specified$(NC)"; \
+		echo "Usage: make demo-threshold THRESHOLD=0.6"; \
+		exit 1; \
+	fi
+	@echo "$(CYAN)Running demo with threshold $(THRESHOLD)...$(NC)"
+	docker exec ai-rel-graph-backend python demo.py --kaggle 50 --threshold $(THRESHOLD)

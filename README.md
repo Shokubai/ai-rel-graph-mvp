@@ -20,12 +20,13 @@ Unlike folder hierarchies or keyword search, AIRelGraph reveals **hidden pattern
 
 ## 🎯 Key Features
 
-- 🤖 **AI-Powered**: Uses sentence-transformers to generate semantic embeddings
-- 🔍 **Auto-Discovery**: DBSCAN clustering automatically groups related documents
+- 🤖 **AI-Powered**: Uses sentence-transformers to generate 384-dim semantic embeddings
+- 🔍 **Community Detection**: Louvain algorithm discovers natural document clusters
 - 📊 **Interactive Graph**: Force-directed visualization with drag, zoom, and click
 - ⚡ **Async Processing**: Celery + Redis for background document processing
-- 🎨 **Named Clusters**: Auto-generated descriptive names like "Learning & Neural"
-- 🔗 **Smart Relationships**: Cosine similarity scores (0.0-1.0) measure semantic closeness
+- 🎨 **Smart Naming**: Auto-generated semantic cluster names from document content
+- 🔗 **Relationship Graph**: Cosine similarity (threshold: 0.5) creates meaningful connections
+- 🏗️ **Service Architecture**: Reusable `SemanticProcessingService` with REST API
 
 ## 🚀 Quick Start
 
@@ -62,13 +63,52 @@ make db-upgrade
 
 ### Try the Demo
 
-See the system in action with realistic mock data:
+See the system in action:
 
 ```bash
-./RUN_DEMO.sh
+# Realistic demo (11 documents)
+make demo
+
+# Large-scale demo (100 synthetic documents)
+make demo-large
+
+# Real PDFs from Kaggle (requires Kaggle API credentials)
+make demo-kaggle          # 50 PDFs
+make demo-kaggle-large    # 100 PDFs
+make demo-custom NUM=75   # Custom count
+
+# Custom similarity threshold
+make demo-threshold THRESHOLD=0.6
 ```
 
-This creates 11 documents, generates embeddings, discovers ~35 relationships, and forms 4-5 auto-named clusters.
+**Kaggle Setup**: To use real PDFs, place your `kaggle.json` in `~/.kaggle/` (get it from [kaggle.com/settings](https://www.kaggle.com/settings)) and accept the [dataset terms](https://www.kaggle.com/datasets/manisha717/dataset-of-pdf-files).
+
+### Visualize the Results
+
+After running a demo, visualize the semantic graph:
+
+```bash
+# Interactive visualization (spring layout)
+make visualize
+
+# Circular cluster layout
+make visualize-circular
+
+# Cluster statistics
+make visualize-stats
+
+# Save to file
+make visualize-save FILE=my_graph.png
+
+# Generate all visualizations
+make visualize-all  # Creates graph_spring.png, graph_circular.png, graph_stats.png
+```
+
+The visualization shows:
+- **Nodes**: Documents (size = number of connections)
+- **Edges**: Semantic relationships (thickness = similarity strength)
+- **Colors**: Discovered communities/clusters
+- **Legend**: Cluster names with document counts
 
 ## 🏗️ Architecture
 
@@ -88,10 +128,11 @@ This creates 11 documents, generates embeddings, discovers ~35 relationships, an
 
 **ML Pipeline:**
 1. Text extraction (PDF, DOCX, XLSX)
-2. Embedding generation (384-dimensional vectors)
-3. Similarity computation (cosine distance)
-4. Cluster discovery (DBSCAN algorithm)
-5. Graph construction & visualization
+2. Embedding generation (384-dimensional vectors via sentence-transformers)
+3. Relationship creation (cosine similarity ≥ 0.5)
+4. Community detection (Louvain algorithm on relationship graph)
+5. Semantic topic naming (embedding-based analysis)
+6. Graph visualization (force-directed layout)
 
 ### Database Schema
 
@@ -155,39 +196,60 @@ docker exec ai-rel-graph-postgres psql -U postgres -d semantic_graph_test -c "CR
 
 ## 🔍 How It Works
 
+AIRelGraph uses a **relationship-first** approach with community detection for clustering:
+
 ### 1. Document Ingestion
-User provides Google Drive folder → System creates processing job
-
-### 2. Text Extraction
-PDFs, DOCX, XLSX files → Raw text content
-
-### 3. Embedding Generation
 ```python
-from sentence_transformers import SentenceTransformer
-model = SentenceTransformer('all-MiniLM-L6-v2')
-embedding = model.encode(text)  # 384-dimensional vector
+# User uploads documents → Files created in database
+File(text_content=text, processing_status="pending")
 ```
 
-### 4. Relationship Discovery
+### 2. Embedding Generation
 ```python
-from sklearn.metrics.pairwise import cosine_similarity
-similarity = cosine_similarity(embedding1, embedding2)
-if similarity >= 0.3:
-    create_relationship(file1, file2, similarity)
+from app.services.semantic import SemanticProcessingService
+
+service = SemanticProcessingService()
+embeddings = service.generate_embeddings(texts)
+# → numpy array shape (n_docs, 384)
 ```
 
-### 5. Automatic Clustering
+### 3. Relationship Discovery
 ```python
-from sklearn.cluster import DBSCAN
-dbscan = DBSCAN(eps=0.5, min_samples=2, metric='cosine')
-clusters = dbscan.fit_predict(embeddings)
+# Build relationship graph from semantic similarity
+relationships, adjacency = service.create_relationships_with_graph(
+    files=files,
+    embeddings=embeddings,
+    threshold=0.5  # Only similarities ≥ 0.5
+)
+# Creates graph edges for clustering
 ```
 
-### 6. Visualization
+### 4. Community Detection
+```python
+# Louvain algorithm finds natural communities in the graph
+clusters = service.create_clusters_from_communities(
+    files=files,
+    adjacency=adjacency  # Relationship graph from step 3
+)
+# Auto-generates semantic topic names like "Neural Networks Learning (15 docs)"
+```
+
+### 5. Visualization
 Interactive force-directed graph with:
 - **Nodes**: Files (size = number of connections)
 - **Edges**: Relationships (thickness = similarity score)
-- **Colors**: Clusters (auto-discovered groups)
+- **Colors**: Communities (discovered by Louvain algorithm)
+
+### Why Community Detection?
+
+**Previous (DBSCAN)**: Clustered embeddings directly
+- Problem: Sensitive to parameters, many small clusters
+
+**Current (Louvain)**: Clusters relationship graph
+- ✅ Discovers natural communities from actual connections
+- ✅ No parameter tuning required
+- ✅ More semantically meaningful clusters
+- ✅ Better scalability
 
 ## 🗂️ Project Structure
 
@@ -195,17 +257,17 @@ Interactive force-directed graph with:
 AIRelGraph/
 ├── backend/                 # FastAPI application
 │   ├── app/
-│   │   ├── api/v1/         # API endpoints
+│   │   ├── api/v1/         # API endpoints (files, semantic)
 │   │   ├── core/           # Config, database, Celery
 │   │   ├── models/         # SQLAlchemy models with pgvector
-│   │   └── workers/        # Celery tasks
+│   │   ├── services/       # Business logic (SemanticProcessingService)
+│   │   └── workers/        # Celery tasks (async processing)
 │   ├── alembic/            # Database migrations
-│   ├── tests/              # 35+ model tests
-│   └── demo_schema.py      # Demo script with realistic data
+│   ├── tests/              # 75+ tests (models + services)
+│   └── demo.py             # Unified demo script
 ├── frontend/               # Next.js application
 │   └── src/app/           # App Router pages
 ├── scripts/               # Utility scripts
-├── RUN_DEMO.sh           # Run schema demo
 └── docker-compose.yml    # Service orchestration
 ```
 
@@ -221,7 +283,7 @@ GOOGLE_CLIENT_ID=your_client_id
 GOOGLE_CLIENT_SECRET=your_client_secret
 SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
 EMBEDDING_DIMENSION=384
-SIMILARITY_THRESHOLD=0.3
+SIMILARITY_THRESHOLD=0.5  # Relationship threshold (0.0-1.0)
 ```
 
 ### Frontend Environment (`frontend/.env.local`)
@@ -256,13 +318,22 @@ GROUP BY c.label;
 
 ## 🧪 Testing
 
-35+ comprehensive tests covering:
+75+ comprehensive tests covering:
+
+**Model Tests (35+ tests)**:
 - ✅ Vector embedding storage & retrieval
 - ✅ Cosine similarity computations
 - ✅ Constraint validations (no self-relationships, score bounds)
 - ✅ CASCADE deletes
 - ✅ Index performance
-- ✅ Cluster discovery
+
+**Service Tests (40+ tests)**:
+- ✅ Embedding generation and similarity
+- ✅ Relationship creation and graph building
+- ✅ Community detection algorithms (Louvain)
+- ✅ Semantic topic naming
+- ✅ Full pipeline integration
+- ✅ Edge cases and error handling
 
 All tests use real PostgreSQL with pgvector (not mocks or SQLite).
 
@@ -287,10 +358,10 @@ make docker-rebuild  # Rebuild containers with new dependencies
 
 ## 📚 Documentation
 
-For detailed technical documentation, see:
-- **[CLAUDE.md](CLAUDE.md)** - Complete architecture, database schema, and implementation details
-- **[RUN_DEMO.sh](RUN_DEMO.sh)** - Demo script to test the system
-- **API Docs** - http://localhost:8000/docs (when running)
+- **[CLAUDE.md](CLAUDE.md)** - Complete architecture, database schema, semantic pipeline, and implementation details
+- **API Docs** - http://localhost:8000/docs (interactive OpenAPI documentation)
+- **Semantic Processing API** - `/api/v1/semantic/` endpoints for embeddings, relationships, and clustering
+- **[backend/demo.py](backend/demo.py)** - Unified demo script with synthetic and real PDF support
 
 ## 🤝 Contributing
 
