@@ -2,7 +2,8 @@
 Tag-Based Processing Service.
 
 Provides core tag-based document analysis functionality:
-- Automated tag extraction from document text
+- ML-based semantic tag extraction using KeyBERT
+- Tag consolidation to merge similar tags
 - Relationship creation based on shared tag count
 - Community-based clustering using tag similarity graph
 - Semantic topic naming for clusters
@@ -16,7 +17,8 @@ from app.models.relationship import FileRelationship
 from app.models.cluster import Cluster, FileCluster
 from app.models.tag import Tag
 from app.models.file_tag import FileTag
-from app.services.tag_extraction import TagExtractionService
+from app.services.ml_tag_extraction import MLTagExtractionService
+from app.services.tag_consolidation import TagConsolidationService
 
 
 class SemanticProcessingService:
@@ -24,22 +26,27 @@ class SemanticProcessingService:
 
     def __init__(
         self,
-        min_shared_tags: int = 1,  # Lower default for better connectivity
-        min_tag_frequency: int = 1,  # Lower to capture more tags
-        max_tags_per_doc: int = 15,  # Increase to capture more concepts
+        min_shared_tags: int = 2,  # Minimum shared tags for relationships
+        max_tags_per_doc: int = 15,  # Maximum tags per document
+        consolidation_threshold: float = 0.6,  # Similarity threshold for tag merging
+        diversity: float = 0.7,  # Diversity parameter for KeyBERT
     ):
         """
-        Initialize the tag-based processing service.
+        Initialize the ML-based tag processing service.
 
         Args:
             min_shared_tags: Minimum number of shared tags to create a relationship
-            min_tag_frequency: Minimum word frequency for tag extraction
             max_tags_per_doc: Maximum number of tags to extract per document
+            consolidation_threshold: Similarity threshold for merging similar tags (0.0-1.0)
+            diversity: Diversity parameter for KeyBERT MMR (0.0-1.0, higher = more diverse)
         """
         self.min_shared_tags = min_shared_tags
-        self.tag_extractor = TagExtractionService(
-            min_tag_frequency=min_tag_frequency,
+        self.tag_extractor = MLTagExtractionService(
             max_tags_per_doc=max_tags_per_doc,
+            diversity=diversity,
+        )
+        self.tag_consolidator = TagConsolidationService(
+            similarity_threshold=consolidation_threshold,
         )
 
     def extract_and_store_tags(
@@ -65,7 +72,7 @@ class SemanticProcessingService:
             if show_progress and (idx % 10 == 0 or idx == len(files) - 1):
                 print(f"Extracting tags: {idx + 1}/{len(files)}")
 
-            # Extract tags from text
+            # Extract tags from text using ML model
             extracted_tags = self.tag_extractor.extract_tags(file.text_content or "")
 
             if not extracted_tags:
@@ -76,7 +83,7 @@ class SemanticProcessingService:
             file_tag_objects = []
             seen_tags = set()  # Track tags already added for this file
 
-            for tag_name, category, relevance_score in extracted_tags:
+            for tag_name, relevance_score in extracted_tags:
                 # Skip if we've already added this tag for this file
                 if tag_name in seen_tags:
                     continue
@@ -86,7 +93,14 @@ class SemanticProcessingService:
                 tag = session.query(Tag).filter(Tag.name == tag_name).first()
 
                 if not tag:
-                    tag = Tag(name=tag_name, category=category, usage_count=0)
+                    # Store embedding for consolidation later
+                    embedding = self.tag_extractor.get_embedding(tag_name)
+                    tag = Tag(
+                        name=tag_name,
+                        category=None,  # Category will be auto-discovered from clusters
+                        usage_count=0,
+                        embedding=embedding.tolist() if embedding is not None else None,
+                    )
                     session.add(tag)
                     session.flush()
 
@@ -189,7 +203,7 @@ class SemanticProcessingService:
         return relationships, adjacency
 
     def community_detection_louvain(
-        self, adjacency: Dict[int, Set[int]], num_nodes: int
+        self, adjacency: Dict[int, Set[int]], num_nodes: int, resolution: float = 0.5
     ) -> List[int]:
         """
         Run Louvain community detection algorithm.
@@ -197,6 +211,7 @@ class SemanticProcessingService:
         Args:
             adjacency: Adjacency dict mapping node index to set of neighbor indices
             num_nodes: Total number of nodes
+            resolution: Resolution parameter (lower = fewer, larger clusters; default 0.5)
 
         Returns:
             List of cluster labels for each node
@@ -214,8 +229,8 @@ class SemanticProcessingService:
                     if node < neighbor:  # Avoid duplicates
                         G.add_edge(node, neighbor)
 
-            # Run Louvain community detection
-            communities = community.louvain_communities(G, resolution=1.0, seed=42)
+            # Run Louvain community detection with lower resolution for fewer clusters
+            communities = community.louvain_communities(G, resolution=resolution, seed=42)
 
             # Convert to labels array
             labels = [-1] * num_nodes
@@ -264,7 +279,8 @@ class SemanticProcessingService:
         self, session: Session, cluster_files: List[File], max_tags: int = 3
     ) -> str:
         """
-        Generate a cluster name based on most common tags.
+        Generate a semantic cluster name based on most common tags.
+        Category is auto-discovered from the cluster's semantic content.
 
         Args:
             session: Database session
@@ -272,58 +288,40 @@ class SemanticProcessingService:
             max_tags: Maximum number of tags to include in name
 
         Returns:
-            Generated cluster name
+            Generated cluster name based on semantic tags
         """
         try:
-            # Collect all tags from cluster files
-            tag_counts: Dict[str, int] = {}
-            category_counts: Dict[str, int] = {}
-
             file_ids = [f.id for f in cluster_files]
 
-            # Query all tags for cluster files
+            # Query top tags for cluster files (by usage frequency)
             cluster_tags = (
                 session.query(Tag, func.count(FileTag.file_id).label("count"))
                 .join(FileTag)
                 .filter(FileTag.file_id.in_(file_ids))
                 .group_by(Tag.id)
                 .order_by(func.count(FileTag.file_id).desc())
-                .limit(10)
+                .limit(max_tags + 5)  # Get a few extra to choose from
                 .all()
             )
 
             if not cluster_tags:
                 return f"Document Cluster ({len(cluster_files)} docs)"
 
-            # Count tags and categories
-            for tag, count in cluster_tags:
-                tag_counts[tag.name] = count
-                if tag.category:
-                    category_counts[tag.category] = category_counts.get(tag.category, 0) + count
-
-            # Find dominant category
-            dominant_category = None
-            if category_counts:
-                dominant_category = max(category_counts.items(), key=lambda x: x[1])[0]
-
-            # Get top tags (prefer tags from dominant category)
+            # Extract top tags (capitalize for readability)
             top_tags = []
             for tag, count in cluster_tags:
                 if len(top_tags) >= max_tags:
                     break
+                # Capitalize multi-word phrases properly
+                tag_display = " ".join(word.capitalize() for word in tag.name.split())
+                top_tags.append(tag_display)
 
-                # Prefer tags from dominant category or general tags
-                if not dominant_category or tag.category == dominant_category or tag.category == "general":
-                    top_tags.append(tag.name.capitalize())
-
-            if not top_tags:
-                top_tags = [tag.name.capitalize() for tag, _ in cluster_tags[:max_tags]]
-
-            # Build cluster name
+            # Build semantic cluster name
             if top_tags:
-                tag_str = " & ".join(top_tags[:max_tags])
-                if len(tag_str) > 50:
-                    tag_str = tag_str[:47] + "..."
+                tag_str = " & ".join(top_tags)
+                # Truncate if too long
+                if len(tag_str) > 60:
+                    tag_str = tag_str[:57] + "..."
                 return f"{tag_str} ({len(cluster_files)} docs)"
 
             return f"Document Cluster ({len(cluster_files)} docs)"
@@ -386,15 +384,17 @@ class SemanticProcessingService:
         files: List[File],
         min_shared: Optional[int] = None,
         show_progress: bool = True,
+        consolidate_tags: bool = True,
     ) -> Dict[str, any]:
         """
-        Full tag-based processing pipeline for documents.
+        Full ML-based tag processing pipeline for documents.
 
         Args:
             session: Database session
             files: List of File objects (must have text_content)
             min_shared: Minimum shared tags for relationships (uses instance default if None)
             show_progress: Whether to show progress updates
+            consolidate_tags: Whether to consolidate similar tags after extraction
 
         Returns:
             Dictionary with processing results:
@@ -402,31 +402,45 @@ class SemanticProcessingService:
             - relationships: list of FileRelationship objects
             - clusters: list of (Cluster, files) tuples
             - adjacency: adjacency graph dict
+            - consolidated_tags: dict mapping child -> parent tag names (if consolidation enabled)
         """
-        # Step 1: Extract and store tags
+        # Step 1: Extract and store tags using ML
         if show_progress:
-            print("Step 1: Extracting tags from documents...")
+            print("Step 1: Extracting semantic tags using ML...")
 
         file_tags = self.extract_and_store_tags(session, files, show_progress=show_progress)
 
-        # Step 2: Create relationships based on shared tags
+        # Step 2: Consolidate similar tags
+        consolidated_mapping = {}
+        if consolidate_tags:
+            if show_progress:
+                print("\nStep 2: Consolidating similar tags...")
+            consolidated_mapping = self.tag_consolidator.consolidate_tags(
+                session, show_progress=show_progress
+            )
+
+        # Step 3: Create relationships based on shared tags
         if show_progress:
-            print("Step 2: Creating relationships based on shared tags...")
+            step_num = 3 if consolidate_tags else 2
+            print(f"\nStep {step_num}: Creating relationships based on shared tags...")
 
         relationships, adjacency = self.create_relationships_with_graph(
             session, files, min_shared=min_shared
         )
 
-        # Step 3: Create clusters using community detection
+        # Step 4: Create clusters using community detection
         if show_progress:
-            print("Step 3: Clustering documents by tag similarity...")
+            step_num = 4 if consolidate_tags else 3
+            print(f"Step {step_num}: Clustering documents by tag similarity...")
 
         clusters_with_files = self.create_clusters_from_communities(
             session, files, adjacency
         )
 
         if show_progress:
-            print(f"✓ Processed {len(files)} documents")
+            print(f"\n✓ Processed {len(files)} documents")
+            if consolidated_mapping:
+                print(f"✓ Consolidated {len(consolidated_mapping)} similar tags")
             print(f"✓ Created {len(relationships)} relationships")
             print(f"✓ Discovered {len(clusters_with_files)} clusters")
 
@@ -435,4 +449,5 @@ class SemanticProcessingService:
             "relationships": relationships,
             "clusters": clusters_with_files,
             "adjacency": adjacency,
+            "consolidated_tags": consolidated_mapping,
         }

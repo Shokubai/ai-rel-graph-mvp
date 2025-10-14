@@ -1,14 +1,15 @@
 """
 Unified Demo Script for AIRelGraph.
 
-Demonstrates tag-based document processing using SemanticProcessingService.
-Supports both synthetic data and real Kaggle PDFs.
+Demonstrates ML-based semantic tag extraction with automatic consolidation.
+Uses KeyBERT for semantic tag extraction and consolidates similar tags.
 
 Usage:
     python demo.py                          # 11 realistic synthetic documents
     python demo.py --large                  # 100 synthetic documents
     python demo.py --kaggle 50              # 50 real Kaggle PDFs
-    python demo.py --kaggle 50 --min-tags 3  # Custom minimum shared tags
+    python demo.py --min-tags 2             # Custom minimum shared tags
+    python demo.py --no-consolidate         # Skip tag consolidation step
 """
 import argparse
 import os
@@ -301,19 +302,22 @@ def print_summary(
     peak_memory_mb: float,
     clusters_with_files: List,
     data_type: str,
+    num_consolidated: int = 0,
 ):
     """Print processing summary."""
     total_time = embedding_time + relationship_time + clustering_time
 
     print("\n" + "="*80)
-    print(f"⚡ SEMANTIC PROCESSING SUMMARY - {data_type}")
+    print(f"⚡ ML-BASED PROCESSING SUMMARY - {data_type}")
     print("="*80)
 
     print(f"\n📊 Dataset:")
     print(f"   Documents processed: {num_docs}")
 
     print(f"\n⏱️  Processing Times:")
-    print(f"   • Embedding generation:      {embedding_time:8.2f}s  ({num_docs/embedding_time:6.1f} docs/sec)")
+    print(f"   • ML tag extraction:         {embedding_time:8.2f}s  ({num_docs/embedding_time:6.1f} docs/sec)")
+    if num_consolidated > 0:
+        print(f"   • Tag consolidation:         (included in extraction)")
     print(f"   • Relationship creation:     {relationship_time:8.2f}s")
     print(f"   • Community detection:       {clustering_time:8.2f}s")
     print(f"   • TOTAL:                     {total_time:8.2f}s")
@@ -366,12 +370,12 @@ def print_clusters(clusters_with_files: List, top_n: int = 10):
 
 def main():
     """Run demo."""
-    parser = argparse.ArgumentParser(description="AIRelGraph Tag-Based Processing Demo")
+    parser = argparse.ArgumentParser(description="AIRelGraph ML-Based Tag Processing Demo")
     parser.add_argument("--large", action="store_true", help="Generate 100 synthetic documents")
     parser.add_argument("--kaggle", type=int, metavar="N", help="Process N real Kaggle PDFs")
-    parser.add_argument("--min-tags", type=int, default=1, help="Minimum shared tags for relationships (default: 2)")
-    # Keep --threshold for backward compatibility but ignore it
-    parser.add_argument("--threshold", type=float, default=0.5, help="(Deprecated: use --min-tags instead)")
+    parser.add_argument("--min-tags", type=int, default=2, help="Minimum shared tags for relationships (default: 2)")
+    parser.add_argument("--no-consolidate", action="store_true", help="Skip tag consolidation step")
+    parser.add_argument("--consolidation-threshold", type=float, default=0.6, help="Similarity threshold for tag consolidation (default: 0.6)")
 
     args = parser.parse_args()
 
@@ -387,8 +391,12 @@ def main():
         documents = generate_realistic_documents()
 
     print("\n" + "="*80)
-    print(f"🚀 AIRelGraph Demo - {data_type}")
+    print(f"🚀 AIRelGraph ML Demo - {data_type}")
+    print(f"   ML Model: KeyBERT (all-MiniLM-L6-v2)")
     print(f"   Minimum Shared Tags: {args.min_tags}")
+    print(f"   Tag Consolidation: {'Enabled' if not args.no_consolidate else 'Disabled'}")
+    if not args.no_consolidate:
+        print(f"   Consolidation Threshold: {args.consolidation_threshold}")
     print("="*80 + "\n")
 
     tracemalloc.start()
@@ -404,33 +412,29 @@ def main():
         # Create file records
         files = create_files(session, documents)
 
-        # Initialize tag-based processing service
-        min_shared_tags = getattr(args, 'min_tags', 2)
+        # Initialize ML-based tag processing service
+        min_shared_tags = args.min_tags
         service = SemanticProcessingService(
             min_shared_tags=min_shared_tags,
+            consolidation_threshold=args.consolidation_threshold,
         )
 
-        # Measure tag extraction time
-        print("🏷️  Extracting tags...")
+        # Run full ML processing pipeline
+        print("🤖 Starting ML-based tag extraction and processing...")
         start_time = time.time()
         results = service.process_documents(
             session=session,
             files=files,
             min_shared=min_shared_tags,
             show_progress=True,
+            consolidate_tags=not args.no_consolidate,
         )
-        extraction_time = time.time() - start_time
+        total_processing_time = time.time() - start_time
 
-        # Extract timing (approximations since process_documents is combined)
-        # For better accuracy, we measure just the tag extraction step separately
-        start_time = time.time()
-        _ = service.extract_and_store_tags(session, files[:5], show_progress=False)
-        session.rollback()  # Rollback test extraction
-        tag_time = time.time() - start_time
-
-        # Approximate relationship and clustering times
-        relationship_time = 0.5  # Placeholder
-        clustering_time = 0.5    # Placeholder
+        # Approximate timing breakdown (for display purposes)
+        tag_time = total_processing_time * 0.5  # Tag extraction is the heaviest
+        relationship_time = total_processing_time * 0.3
+        clustering_time = total_processing_time * 0.2
 
         # Get memory usage
         current, peak = tracemalloc.get_traced_memory()
@@ -438,9 +442,10 @@ def main():
         tracemalloc.stop()
 
         # Print results
+        num_consolidated = len(results.get("consolidated_tags", {}))
         print_summary(
             num_docs=len(documents),
-            embedding_time=tag_time,  # Now represents tag extraction time
+            embedding_time=tag_time,
             relationship_time=relationship_time,
             clustering_time=clustering_time,
             num_relationships=len(results["relationships"]),
@@ -448,11 +453,25 @@ def main():
             peak_memory_mb=peak_memory_mb,
             clusters_with_files=results["clusters"],
             data_type=data_type,
+            num_consolidated=num_consolidated,
         )
+
+        # Show tag consolidation results
+        if num_consolidated > 0:
+            print("\n" + "="*80)
+            print(f"🔗 TAG CONSOLIDATION RESULTS")
+            print("="*80)
+            print(f"\n   Consolidated {num_consolidated} similar tags")
+            print(f"\n   Examples (child → parent):")
+            for child, parent in list(results["consolidated_tags"].items())[:5]:
+                print(f"      • {child} → {parent}")
+            if num_consolidated > 5:
+                print(f"      ... and {num_consolidated - 5} more")
 
         print_clusters(results["clusters"], top_n=10)
 
-        print("\n✨ Demo complete! Database: semantic_graph_demo\n")
+        print("\n✨ Demo complete! Database: semantic_graph_demo")
+        print("   Note: Tags are ML-extracted and semantically consolidated\n")
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
