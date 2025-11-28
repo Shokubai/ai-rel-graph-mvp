@@ -15,23 +15,20 @@ const GOOGLE_DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
  */
 async function fetchFromDrive<T>(
   endpoint: string,
-  accessToken: string
+  accessToken: string,
 ): Promise<T> {
   try {
-    const response = await axios.get<T>(
-      `${GOOGLE_DRIVE_API_BASE}${endpoint}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const response = await axios.get<T>(`${GOOGLE_DRIVE_API_BASE}${endpoint}`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
     return response.data;
   } catch (error) {
     if (error instanceof AxiosError) {
       throw new Error(
-        `Google Drive API error: ${error.response?.statusText || error.message}`
+        `Google Drive API error: ${error.response?.statusText || error.message}`,
       );
     }
     throw error;
@@ -73,7 +70,7 @@ export function useListDriveFiles(folderId?: string, enabled = true) {
 
         const response = await fetchFromDrive<DriveFileListResponse>(
           `/files?${params}`,
-          session.accessToken
+          session.accessToken,
         );
 
         allFiles.push(...response.files);
@@ -107,7 +104,7 @@ export function useDriveFileMetadata(fileId?: string) {
 
       return fetchFromDrive<DriveFileMetadata>(
         `/files/${fileId}?${params}`,
-        session.accessToken
+        session.accessToken,
       );
     },
     enabled: !!session?.accessToken && !!fileId,
@@ -144,14 +141,14 @@ export function useExportDriveFile() {
               Authorization: `Bearer ${session.accessToken}`,
             },
             responseType: "blob",
-          }
+          },
         );
 
         return response.data;
       } catch (error) {
         if (error instanceof AxiosError) {
           throw new Error(
-            `Failed to export file: ${error.response?.statusText || error.message}`
+            `Failed to export file: ${error.response?.statusText || error.message}`,
           );
         }
         throw error;
@@ -182,7 +179,7 @@ export function useSearchDriveFiles(searchQuery?: string) {
 
       return fetchFromDrive<DriveFileListResponse>(
         `/files?${params}`,
-        session.accessToken
+        session.accessToken,
       );
     },
     enabled: !!session?.accessToken && !!searchQuery && searchQuery.length > 0,
