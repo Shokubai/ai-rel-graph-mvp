@@ -43,6 +43,9 @@ importers:
       tailwind-merge:
         specifier: ^2.0.0
         version: 2.6.0
+      zod:
+        specifier: ^4.1.13
+        version: 4.1.13
       zustand:
         specifier: ^4.4.0
         version: 4.5.7(@types/react@19.1.16)(react@19.1.0)
@@ -5646,6 +5649,12 @@ packages:
       }
     engines: { node: ">=10" }
 
+  zod@4.1.13:
+    resolution:
+      {
+        integrity: sha512-AvvthqfqrAhNH9dnfmrfKzX5upOdjUVJYFqNSlkmGf64gRaTzlPwz99IHYnVs28qYAybvAlBV+H7pn0saFY4Ig==,
+      }
+
   zustand@4.5.7:
     resolution:
       {
@@ -9532,6 +9541,8 @@ snapshots:
       yargs-parser: 21.1.1
 
   yocto-queue@0.1.0: {}
+
+  zod@4.1.13: {}
 
   zustand@4.5.7(@types/react@19.1.16)(react@19.1.0):
     dependencies:

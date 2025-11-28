@@ -1,6 +1,22 @@
 import NextAuth, { NextAuthOptions } from "next-auth";
 import { JWT } from "next-auth/jwt";
 import GoogleProvider from "next-auth/providers/google";
+import { z } from "zod";
+
+// Schema for validating session update data from client
+const sessionUpdateSchema = z.object({
+  // Only allow updating specific safe fields
+  user: z
+    .object({
+      name: z.string().max(255).optional(),
+      image: z.string().max(500).url().optional(),
+    })
+    .strict()
+    .optional(),
+  // Explicitly reject any attempts to update sensitive fields
+  accessToken: z.never().optional(),
+  error: z.never().optional(),
+});
 
 // add on to this from https://next-auth.js.org/configuration/options
 export const authOptions: NextAuthOptions = {
@@ -26,12 +42,27 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
-    async jwt({ token, account }) {
-      // Store access token and refresh token on sign in
-      if (account) {
-        token.accessToken = account.access_token;
-        token.refreshToken = account.refresh_token;
-        token.accessTokenExpires = account.expires_at;
+    async jwt({ token, user, account, trigger }) {
+      if (trigger === "signIn" || trigger === "signUp") {
+        // Store access token and refresh token on sign in/sign up
+        if (account) {
+          token.accessToken = account.access_token;
+          token.refreshToken = account.refresh_token;
+          token.accessTokenExpires = account.expires_at;
+        }
+
+        // Store user info on initial sign in
+        if (user) {
+          token.id = user.id;
+          token.email = user.email;
+        }
+
+        // Log signup events for tracking
+        if (trigger === "signUp") {
+          console.log("New user signed up:", user?.email);
+        }
+
+        return token;
       }
 
       // Return previous token if the access token has not expired yet
@@ -45,10 +76,38 @@ export const authOptions: NextAuthOptions = {
       // Access token has expired, try to update it
       return refreshAccessToken(token);
     },
-    async session({ session, token }) {
+    async session({ session, token, trigger, newSession }) {
       // Send properties to the client
       session.accessToken = token.accessToken as string;
       session.error = token.error as string;
+
+      // Set user ID from token
+      if (token.id) {
+        session.user.id = token.id;
+      }
+
+      // Handle session updates from client
+      if (trigger === "update" && newSession) {
+        // Validate client-sent data
+        const validation = sessionUpdateSchema.safeParse(newSession);
+
+        if (!validation.success) {
+          console.error("Invalid session update data:", validation.error);
+          return session;
+        }
+
+        // Merge validated data
+        const validatedData = validation.data;
+        if (validatedData.user) {
+          session.user = {
+            ...session.user,
+            ...validatedData.user,
+          };
+        }
+
+        console.log("Session updated successfully:", validatedData);
+      }
+
       return session;
     },
   },
