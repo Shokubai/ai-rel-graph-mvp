@@ -43,6 +43,17 @@ export const authOptions: NextAuthOptions = {
       },
     }),
   ],
+  cookies: {
+    sessionToken: {
+      name: 'next-auth.session-token',
+      options: {
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        secure: process.env.NODE_ENV === 'production',
+      },
+    },
+  },
   callbacks: {
     async jwt({ token, user, account, trigger }) {
       if (trigger === "signIn" || trigger === "signUp") {

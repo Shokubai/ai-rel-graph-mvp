@@ -44,8 +44,8 @@ dev-frontend: ## Run frontend in development mode (local, no Docker)
 
 # === Docker Commands ===
 
-docker-up: ## Start all Docker services
-	@echo "$(CYAN)Starting Docker services...$(NC)"
+docker-up: ## Start all Docker services (development)
+	@echo "$(CYAN)Starting Docker services (development)...$(NC)"
 	docker compose up -d
 	@echo "$(GREEN)✓ Services started$(NC)"
 	@$(MAKE) docker-status
@@ -54,6 +54,32 @@ docker-down: ## Stop all Docker services
 	@echo "$(CYAN)Stopping Docker services...$(NC)"
 	docker compose down
 	@echo "$(GREEN)✓ Services stopped$(NC)"
+
+docker-up-prod: ## Start all Docker services (production)
+	@echo "$(CYAN)Starting Docker services (production)...$(NC)"
+	docker compose -f docker-compose.prod.yml up -d --build
+	@echo "$(GREEN)✓ Production services started$(NC)"
+	@$(MAKE) docker-status-prod
+
+docker-down-prod: ## Stop production Docker services
+	@echo "$(CYAN)Stopping production Docker services...$(NC)"
+	docker compose -f docker-compose.prod.yml down
+	@echo "$(GREEN)✓ Production services stopped$(NC)"
+
+docker-status-prod: ## Check status of production Docker services
+	@echo "$(CYAN)Production Docker Services Status:$(NC)"
+	@docker compose -f docker-compose.prod.yml ps
+
+docker-logs-prod: ## Show logs from production services
+	docker compose -f docker-compose.prod.yml logs -f
+
+docker-logs-backend-prod: ## Show production backend logs
+	docker compose -f docker-compose.prod.yml logs -f backend
+
+docker-restart-prod: ## Restart production services
+	@echo "$(CYAN)Restarting production services...$(NC)"
+	docker compose -f docker-compose.prod.yml restart
+	@echo "$(GREEN)✓ Services restarted$(NC)"
 
 docker-logs: ## Show logs from all services
 	docker compose logs -f
@@ -113,8 +139,16 @@ db-reset: ## Reset database (WARNING: destroys all data)
 		echo "$(GREEN)✓ Database reset$(NC)"; \
 	fi
 
-db-shell: ## Open PostgreSQL shell
+db-shell: ## Open PostgreSQL shell (development)
 	docker compose exec postgres psql -U postgres -d semantic_graph
+
+db-shell-prod: ## Open PostgreSQL shell (production)
+	docker compose -f docker-compose.prod.yml exec postgres psql -U postgres -d semantic_graph
+
+db-upgrade-prod: ## Run database migrations in production
+	@echo "$(CYAN)Running production database migrations...$(NC)"
+	docker compose -f docker-compose.prod.yml exec backend alembic upgrade head
+	@echo "$(GREEN)✓ Migrations complete$(NC)"
 
 # === Testing Commands ===
 
@@ -175,7 +209,7 @@ clean: ## Clean temporary files and caches
 	cd frontend && rm -rf .next 2>/dev/null || true
 	@echo "$(GREEN)✓ Cleaned$(NC)"
 
-health-check: ## Check if all services are healthy
+health-check: ## Check if all services are healthy (development)
 	@echo "$(CYAN)Checking service health...$(NC)"
 	@echo -n "Backend API: "
 	@curl -s http://localhost:8000/health > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
@@ -185,6 +219,17 @@ health-check: ## Check if all services are healthy
 	@docker compose exec -T postgres pg_isready -U postgres > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
 	@echo -n "Redis: "
 	@docker compose exec -T redis redis-cli ping > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+
+health-check-prod: ## Check if production services are healthy
+	@echo "$(CYAN)Checking production service health...$(NC)"
+	@echo -n "Backend API: "
+	@curl -s http://localhost:8000/health > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+	@echo -n "Frontend: "
+	@curl -s http://localhost:80 > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+	@echo -n "PostgreSQL: "
+	@docker compose -f docker-compose.prod.yml exec -T postgres pg_isready -U postgres > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
+	@echo -n "Redis: "
+	@docker compose -f docker-compose.prod.yml exec -T redis redis-cli ping > /dev/null 2>&1 && echo "$(GREEN)✓$(NC)" || echo "$(RED)✗$(NC)"
 
 urls: ## Show all service URLs
 	@echo "$(CYAN)Service URLs:$(NC)"
