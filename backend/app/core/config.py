@@ -31,11 +31,6 @@ class Settings(BaseSettings):
     # NextAuth JWT Secret (shared with frontend)
     NEXTAUTH_SECRET: str = ""
 
-    # ML Models
-    SENTENCE_TRANSFORMER_MODEL: str = "all-MiniLM-L6-v2"
-    EMBEDDING_DIMENSION: int = 384
-    SIMILARITY_THRESHOLD: float = 0.7
-
     # CORS
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost"]
 

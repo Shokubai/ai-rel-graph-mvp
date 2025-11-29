@@ -1,6 +1,7 @@
 """User management endpoints."""
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
@@ -25,7 +26,7 @@ class UserTokenUpdate(BaseModel):
 class UserResponse(BaseModel):
     """Response model for user data."""
 
-    id: str
+    id: UUID
     email: str
     name: Optional[str]
     created_at: datetime

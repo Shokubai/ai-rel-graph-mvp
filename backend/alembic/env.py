@@ -6,12 +6,8 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app.core.config import settings
 from app.core.database import Base
-from app.models.cluster import Cluster, FileCluster  # noqa
-
 # Import all models so Alembic can detect them
-from app.models.file import File  # noqa
-from app.models.job import ProcessingJob  # noqa
-from app.models.relationship import FileRelationship  # noqa
+from app.models.user import User  # noqa
 
 # this is the Alembic Config object
 config = context.config
