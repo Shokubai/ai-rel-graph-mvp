@@ -8,19 +8,29 @@ import type {
   DriveFileMetadata,
 } from "@/types/google-drive";
 
-const GOOGLE_DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 /**
- * Fetches data from Google Drive API
+ * Get JWT token for backend authentication
  */
-async function fetchFromDrive<T>(
-  endpoint: string,
-  accessToken: string,
-): Promise<T> {
+async function getAuthToken(): Promise<string> {
+  const response = await fetch("/api/auth/token");
+  if (!response.ok) {
+    throw new Error("Failed to get authentication token");
+  }
+  const data = await response.json();
+  return data.token;
+}
+
+/**
+ * Fetches data from backend Drive proxy
+ */
+async function fetchFromDrive<T>(endpoint: string): Promise<T> {
   try {
-    const response = await axios.get<T>(`${GOOGLE_DRIVE_API_BASE}${endpoint}`, {
+    const token = await getAuthToken();
+    const response = await axios.get<T>(`${API_BASE}/api/v1/drive${endpoint}`, {
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
     });
@@ -28,7 +38,7 @@ async function fetchFromDrive<T>(
   } catch (error) {
     if (error instanceof AxiosError) {
       throw new Error(
-        `Google Drive API error: ${error.response?.statusText || error.message}`,
+        `Drive API error: ${error.response?.statusText || error.message}`,
       );
     }
     throw error;
@@ -44,13 +54,9 @@ export function useListDriveFiles(folderId?: string, enabled = true) {
   return useQuery({
     queryKey: ["drive-files", folderId],
     queryFn: async () => {
-      if (!session?.accessToken) {
-        throw new Error("No access token available");
+      if (!session?.user) {
+        throw new Error("Not authenticated");
       }
-
-      const query = folderId
-        ? `'${folderId}' in parents and trashed=false`
-        : "trashed=false";
 
       // Fetch all pages of results
       const allFiles: DriveFileListResponse["files"] = [];
@@ -58,11 +64,12 @@ export function useListDriveFiles(folderId?: string, enabled = true) {
 
       do {
         const params = new URLSearchParams({
-          q: query,
-          fields:
-            "files(id,name,mimeType,modifiedTime,size,webViewLink,thumbnailLink,parents),nextPageToken",
           pageSize: "100",
         });
+
+        if (folderId) {
+          params.set("folderId", folderId);
+        }
 
         if (pageToken) {
           params.set("pageToken", pageToken);
@@ -70,7 +77,6 @@ export function useListDriveFiles(folderId?: string, enabled = true) {
 
         const response = await fetchFromDrive<DriveFileListResponse>(
           `/files?${params}`,
-          session.accessToken,
         );
 
         allFiles.push(...response.files);
@@ -79,7 +85,7 @@ export function useListDriveFiles(folderId?: string, enabled = true) {
 
       return { files: allFiles };
     },
-    enabled: enabled && !!session?.accessToken,
+    enabled: enabled && !!session?.user,
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 }
@@ -93,21 +99,13 @@ export function useDriveFileMetadata(fileId?: string) {
   return useQuery({
     queryKey: ["drive-file-metadata", fileId],
     queryFn: async () => {
-      if (!session?.accessToken || !fileId) {
-        throw new Error("Missing access token or file ID");
+      if (!session?.user || !fileId) {
+        throw new Error("Missing authentication or file ID");
       }
 
-      const params = new URLSearchParams({
-        fields:
-          "id,name,mimeType,description,starred,trashed,createdTime,modifiedTime,size,owners",
-      });
-
-      return fetchFromDrive<DriveFileMetadata>(
-        `/files/${fileId}?${params}`,
-        session.accessToken,
-      );
+      return fetchFromDrive<DriveFileMetadata>(`/files/${fileId}`);
     },
-    enabled: !!session?.accessToken && !!fileId,
+    enabled: !!session?.user && !!fileId,
   });
 }
 
@@ -125,20 +123,25 @@ export function useExportDriveFile() {
       fileId: string;
       mimeType?: string;
     }) => {
-      if (!session?.accessToken) {
-        throw new Error("No access token available");
+      if (!session?.user) {
+        throw new Error("Not authenticated");
       }
 
-      const endpoint = mimeType
-        ? `/files/${fileId}/export?mimeType=${encodeURIComponent(mimeType)}`
-        : `/files/${fileId}?alt=media`;
+      const token = await getAuthToken();
+      const params = new URLSearchParams();
+
+      if (mimeType) {
+        params.set("mimeType", mimeType);
+      }
+
+      const endpoint = `/files/${fileId}/export${params.toString() ? `?${params}` : ""}`;
 
       try {
         const response = await axios.get<Blob>(
-          `${GOOGLE_DRIVE_API_BASE}${endpoint}`,
+          `${API_BASE}/api/v1/drive${endpoint}`,
           {
             headers: {
-              Authorization: `Bearer ${session.accessToken}`,
+              Authorization: `Bearer ${token}`,
             },
             responseType: "blob",
           },
@@ -166,22 +169,17 @@ export function useSearchDriveFiles(searchQuery?: string) {
   return useQuery({
     queryKey: ["drive-search", searchQuery],
     queryFn: async () => {
-      if (!session?.accessToken || !searchQuery) {
-        throw new Error("Missing access token or search query");
+      if (!session?.user || !searchQuery) {
+        throw new Error("Missing authentication or search query");
       }
 
-      const query = `name contains '${searchQuery}' and trashed=false`;
       const params = new URLSearchParams({
-        q: query,
-        fields: "files(id,name,mimeType,modifiedTime,size,webViewLink)",
+        query: searchQuery,
         pageSize: "50",
       });
 
-      return fetchFromDrive<DriveFileListResponse>(
-        `/files?${params}`,
-        session.accessToken,
-      );
+      return fetchFromDrive<DriveFileListResponse>(`/files/search?${params}`);
     },
-    enabled: !!session?.accessToken && !!searchQuery && searchQuery.length > 0,
+    enabled: !!session?.user && !!searchQuery && searchQuery.length > 0,
   });
 }

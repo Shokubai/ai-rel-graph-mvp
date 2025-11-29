@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    # NextAuth JWT Secret (shared with frontend)
+    NEXTAUTH_SECRET: str = ""
+
     # ML Models
     SENTENCE_TRANSFORMER_MODEL: str = "all-MiniLM-L6-v2"
     EMBEDDING_DIMENSION: int = 384

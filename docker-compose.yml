@@ -44,17 +44,14 @@ services:
       - /app/.venv
     ports:
       - "8000:8000"
+    env_file:
+      - ./backend/.env
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      # Override for Docker network (containers use service names, not localhost)
       - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=semantic_graph
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - ALLOWED_ORIGINS=["http://localhost:3000","http://localhost"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,14 +69,12 @@ services:
     volumes:
       - ./backend:/app
       - /app/.venv
+    env_file:
+      - ./backend/.env
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      # Override for Docker network
       - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=semantic_graph
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
@@ -95,11 +90,15 @@ services:
       dockerfile: Dockerfile
     container_name: semantic-graph-frontend
     ports:
-      - "80:80"
+      - "80:3000"
+    env_file:
+      - ./frontend/.env.production
     environment:
-      # These get baked into the static build
+      # Client-side API URL (relative path for browser requests)
       - NEXT_PUBLIC_API_URL=/api
       - NEXT_PUBLIC_WS_URL=/ws
+      # Server-side API URL (Docker network hostname for NextAuth callbacks)
+      - INTERNAL_API_URL=http://backend:8000
     depends_on:
       - backend
     networks:

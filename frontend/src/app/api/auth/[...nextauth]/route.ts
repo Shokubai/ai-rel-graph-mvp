@@ -20,6 +20,8 @@ const sessionUpdateSchema = z.object({
 
 // add on to this from https://next-auth.js.org/configuration/options
 export const authOptions: NextAuthOptions = {
+  // Secret for signing JWTs
+  secret: process.env.NEXTAUTH_SECRET,
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID || "",
@@ -49,6 +51,35 @@ export const authOptions: NextAuthOptions = {
           token.accessToken = account.access_token;
           token.refreshToken = account.refresh_token;
           token.accessTokenExpires = account.expires_at;
+
+          // Sync user tokens
+          if (user) {
+            try {
+              const apiUrl = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+              await fetch(
+                `${apiUrl}/api/v1/users/sync`,
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "X-Internal-Key": process.env.NEXTAUTH_SECRET || "",
+                  },
+                  body: JSON.stringify({
+                    google_id: user.id,
+                    email: user.email,
+                    name: user.name,
+                    google_access_token: account.access_token,
+                    google_refresh_token: account.refresh_token,
+                    google_token_expires_at: account.expires_at
+                      ? new Date(account.expires_at * 1000).toISOString()
+                      : null,
+                  }),
+                },
+              );
+            } catch (error) {
+              console.error("Failed to sync user tokens to backend:", error);
+            }
+          }
         }
 
         // Store user info on initial sign in
@@ -77,8 +108,6 @@ export const authOptions: NextAuthOptions = {
       return refreshAccessToken(token);
     },
     async session({ session, token, trigger, newSession }) {
-      // Send properties to the client
-      session.accessToken = token.accessToken as string;
       session.error = token.error as string;
 
       // Set user ID from token
@@ -92,7 +121,7 @@ export const authOptions: NextAuthOptions = {
         const validation = sessionUpdateSchema.safeParse(newSession);
 
         if (!validation.success) {
-          console.error("Invalid session update data:", validation.error);
+          console.error("Invalid session update data");
           return session;
         }
 
@@ -141,14 +170,45 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       throw refreshedTokens;
     }
 
-    return {
+    const newToken = {
       ...token,
       accessToken: refreshedTokens.access_token,
       accessTokenExpires: Date.now() + refreshedTokens.expires_in * 1000,
       refreshToken: refreshedTokens.refresh_token ?? token.refreshToken,
     };
-  } catch (error) {
-    console.error("Error refreshing access token", error);
+
+    // Sync refreshed token to backend
+    if (token.id && token.email) {
+      try {
+        const apiUrl = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        await fetch(
+          `${apiUrl}/api/v1/users/sync`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Internal-Key": process.env.NEXTAUTH_SECRET || "",
+            },
+            body: JSON.stringify({
+              google_id: token.id,
+              email: token.email,
+              name: token.name,
+              google_access_token: newToken.accessToken,
+              google_refresh_token: newToken.refreshToken,
+              google_token_expires_at: new Date(
+                newToken.accessTokenExpires as number,
+              ).toISOString(),
+            }),
+          },
+        );
+      } catch (error) {
+        console.error("Failed to sync refreshed tokens to backend:", error);
+      }
+    }
+
+    return newToken;
+  } catch {
+    console.error("Error refreshing access token");
     return {
       ...token,
       error: "RefreshAccessTokenError",
