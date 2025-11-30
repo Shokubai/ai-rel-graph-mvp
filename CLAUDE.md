@@ -1,544 +1,416 @@
-# CLAUDE.md
+# Knowledge Graph Project - Claude Instructions
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Project Overview
 
-## Core Concept
+This is a Knowledge Graph system that transforms unstructured Google Drive documents into an interactive, navigable semantic network. Users can explore organizational knowledge through visual connections, entity relationships, and semantic similarity rather than traditional folder hierarchies.
 
-AIRelGraph analyzes documents to discover **semantic relationships** - connections based on meaning and purpose rather than explicit links. For example:
+## System Architecture
 
-- Two research papers about penguin migration → linked by shared topic
-- A budget spreadsheet and financial report → linked by similar purpose/domain
-- Meeting notes mentioning "Q4 strategy" → linked to strategy documents
+The system consists of 4 main layers:
 
-**How it works:**
-1. User provides a Google Drive folder
-2. System extracts text from all documents
-3. Automated tag extraction identifies keywords and categorizes documents
-4. Documents sharing tags are connected (minimum 2 shared tags)
-5. Community detection algorithm discovers clusters based on tag relationships
-6. Interactive graph visualizes connections (force-directed layout)
+1. **Ingestion Layer** - Connects to Google Drive, detects changes, converts files
+2. **Intelligence Layer** - Generates embeddings, extracts entities, tags documents with LLMs
+3. **Data Layer** - Stores everything in Neo4j graph database with vector search
+4. **Frontend Layer** - React application with 3D force-graph visualization
 
-**The Graph:**
-- **Nodes**: Individual files (size = number of connections)
-- **Edges**: Shared tag count (more shared tags = stronger connection)
-- **Clusters**: Auto-discovered groups of documents with similar tags
-- **Interaction**: Click nodes to preview, drag to explore
+## Key Technologies
 
-Unlike folder hierarchies or keyword search, this reveals **hidden patterns** in how documents relate through shared topics and categories.
+- **Backend:** Python FastAPI, Celery, Redis
+- **Database:** Neo4j (graph + vectors), PostgreSQL (metadata)
+- **AI/ML:** OpenAI (embeddings + GPT-4), spaCy (NER), LangChain
+- **Frontend:** React, TypeScript, react-force-graph-3d
+- **Infrastructure:** Docker, Google Drive API
 
-## Architecture
+## Core Concepts
 
-### Backend (`backend/`)
-- **Framework**: FastAPI with SQLAlchemy ORM and Alembic migrations
-- **Database**: PostgreSQL for structured data storage
-- **Task Queue**: Celery workers backed by Redis for async document processing
-- **NLP Pipeline**: NLTK + scikit-learn for automated tag extraction and categorization
+### Graph Data Model
 
-**Database Models**:
-- `File`: Documents with text content and processing status
-- `Tag`: Extracted keywords with category classification (technology, finance, business, etc.)
-- `FileTag`: Many-to-many mapping with relevance scores
-- `FileRelationship`: Tag-based connections (shared_tag_count, Jaccard similarity)
-- `Cluster`: Auto-discovered document groups (via community detection)
-- `FileCluster`: Many-to-many mapping between files and clusters
-- `ProcessingJob`: Tracks background job progress and errors
+**Nodes:**
 
-**Core modules**:
-- `app/core/`: Configuration, database setup, Celery app
-- `app/models/`: SQLAlchemy models for tags, files, and relationships
-- `app/api/v1/`: API endpoints (files, tag-based processing)
-- `app/services/`: Business logic services (TagExtractionService, SemanticProcessingService)
-- `app/workers/`: Celery tasks for async document processing
+- `File` - Represents documents (properties: title, url, author, embedding vector, summary)
+- `Tag` - Category labels (e.g., "Finance", "Q3 Report")
+- `Entity` - Things mentioned in documents (people, projects, companies)
 
-### Frontend (`frontend/`)
-- **Framework**: Next.js 15 with App Router (not Pages Router)
-- **State**: Zustand for global state, TanStack Query for server state
-- **Graph**: react-force-graph 2D for visualization
-- **Styling**: Tailwind CSS v4
-- **Location**: Source files in `frontend/src/app/`
+**Relationships:**
 
-### Docker Services
-- `ai-rel-graph-postgres`: pgvector/pgvector:pg15 on port 5432
-- `ai-rel-graph-redis`: Redis 7 on port 6379
-- `ai-rel-graph-backend`: FastAPI on port 8000
-- `ai-rel-graph-celery`: Background task processor
-- `ai-rel-graph-frontend`: Next.js served via nginx on port 80
+- `(:File)-[:HAS_TAG]->(:Tag)` - Document categorization
+- `(:File)-[:MENTIONS {confidence}]->(:Entity)` - Named entity references
+- `(:File)-[:SIMILAR_TO {score}]->(:File)` - Semantic similarity (cosine similarity > threshold)
 
-## Development Commands
+### Processing Pipeline
 
-### Initial Setup
-```bash
-make setup              # Copy .env files and install dependencies
-make docker-up          # Start all services
-sleep 10                # Wait for services to be ready
-make db-upgrade         # Run database migrations
-./scripts/test-setup.sh # Verify everything works
+```
+Google Drive Upload
+  ↓
+Webhook/Polling Detection
+  ↓
+File Download & Conversion
+  ↓
+Embedding Generation (1536-dim vector)
+  ↓
+LLM Metadata Extraction (tags, entities, summary)
+  ↓
+Graph Node Creation
+  ↓
+Similarity Calculation (cosine similarity)
+  ↓
+Community Detection (Louvain algorithm)
+  ↓
+Visualization in UI
 ```
 
-### Daily Development
-```bash
-make docker-up          # Start all Docker services
-make docker-logs        # Follow logs from all services
-make health-check       # Check service health
-make docker-down        # Stop all services
-```
+## Important Constraints & Decisions
+
+### Threshold Tuning Strategy
+
+- **Adaptive thresholds** by document type (technical docs: 0.92, meeting notes: 0.75)
+- **Multi-tier similarity** with edge weights (strong/medium/weak)
+- **User feedback loop** to auto-tune thresholds over time
+- **Dynamic clustering** increases thresholds for large clusters
+
+### Entity Recognition Approach
+
+- **Hybrid NER:** Rule-based (regex) + Statistical (spaCy) + LLM extraction
+- **Confidence scoring:** Only create nodes for entities with confidence > 0.75
+- **Entity resolution:** Canonical entity registry with fuzzy matching for aliases
+- **Human-in-the-loop:** UI for validating uncertain entities
+- **Context-aware filtering:** Use TF-IDF to exclude overly common entities (prevent "hairball")
+
+### Scalability Considerations
+
+- **Asynchronous processing:** All document analysis runs in Celery workers
+- **Incremental updates:** Only re-process changed documents
+- **Rate limiting:** Exponential backoff for Google Drive API
+- **Caching:** Store embeddings and similarity calculations
+- **Graph sampling:** Frontend shows most important nodes first
+
+## Common Development Tasks
+
+### When Working on the Ingestion Layer:
+
+- Focus on: OAuth flow, webhook handling, file conversion, error recovery
+- Key files: `auth.py`, `webhooks.py`, `file_converter.py`
+- Test with: Various Google Drive file formats (.gdoc, .pdf, .docx, .gsheet)
+
+### When Working on the Intelligence Layer:
+
+- Focus on: Embedding generation, LLM prompts, NER pipeline, similarity calculation
+- Key files: `embedding_service.py`, `llm_processor.py`, `ner_pipeline.py`, `similarity.py`
+- Test with: Sample documents of different types and lengths
+
+### When Working on the Data Layer:
+
+- Focus on: Neo4j schema, Cypher queries, vector indexing, community detection
+- Key files: `graph_repository.py`, `migrations/`, `neo4j_config.py`
+- Test with: Neo4j Browser, sample Cypher queries
+
+### When Working on the Frontend:
+
+- Focus on: Graph visualization, search/filter UI, document details panel
+- Key files: `KnowledgeGraphVisualization.tsx`, `SearchBar.tsx`, `DocumentPanel.tsx`
+- Test with: Sample graph data, various filter combinations
+
+## Development Guidelines
 
 ### Code Quality
+
+- Use type hints in Python (FastAPI requires them)
+- Follow React/TypeScript best practices
+- Write unit tests for core algorithms (similarity, NER)
+- Use async/await for I/O operations
+- Handle errors gracefully with try/except and user-friendly messages
+
+### Performance Optimization
+
+- **Batch processing:** Process multiple documents simultaneously when possible
+- **Lazy loading:** Don't load entire graph at once in frontend
+- **Indexes:** Create indexes on frequently queried fields (file_id, entity names)
+- **Caching:** Use Redis for frequently accessed data
+- **Profiling:** Monitor slow queries and optimize bottlenecks
+
+### Security
+
+- Store OAuth tokens encrypted
+- Validate webhook signatures from Google
+- Sanitize user inputs in search queries
+- Rate limit API endpoints to prevent abuse
+- Use environment variables for secrets (never commit them)
+
+## Debugging Tips
+
+### If documents aren't appearing in the graph:
+
+1. Check `file_processing_state` table for status
+2. Look at Celery worker logs for errors
+3. Verify Google Drive API permissions
+4. Check if file conversion succeeded
+5. Confirm Neo4j connection is working
+
+### If similarities are wrong:
+
+1. Verify embedding generation completed
+2. Check similarity threshold settings
+3. Look at actual similarity scores in database
+4. Confirm document types match (don't compare reports to meeting notes)
+5. Check if documents have enough content (very short docs won't cluster well)
+
+### If entities aren't being recognized:
+
+1. Check LLM response format (must be valid JSON)
+2. Verify confidence thresholds aren't too high
+3. Look at spaCy NER output separately
+4. Check entity canonicalization logic
+5. Review entity feedback from users
+
+### If graph visualization is slow:
+
+1. Check number of nodes being rendered (should be < 1000)
+2. Verify WebGL is enabled in browser
+3. Implement graph sampling/filtering
+4. Check for excessive edge count
+5. Profile React component renders
+
+## API Endpoint Reference
+
+### Most Important Endpoints
+
+```
+GET /api/graph?filters=...
+  Returns graph data (nodes + edges) with optional filters
+
+GET /api/documents/{file_id}
+  Returns full document details including entities, tags, similar docs
+
+POST /api/documents/{file_id}/feedback
+  Submit user feedback on entities (for improving NER)
+
+GET /api/graph/search?q=...
+  Search for documents by text query
+
+GET /api/analytics/overview
+  Dashboard statistics (total docs, tags, entities, communities)
+```
+
+## Known Issues & Workarounds
+
+### Issue 1: Google Drive API Quota Exceeded
+
+**Symptom:** 429 errors in logs, documents not being processed
+
+**Workaround:**
+
+- Implement exponential backoff (already in code)
+- Reduce polling frequency
+- Use webhook notifications instead of polling
+- Spread processing across multiple days for large backlogs
+
+### Issue 2: Neo4j Memory Issues with Large Graphs
+
+**Symptom:** Out of memory errors, slow queries
+
+**Workaround:**
+
+- Increase Neo4j heap size in config
+- Implement graph partitioning
+- Archive old documents to separate database
+- Use APOC procedures for batch operations
+
+### Issue 3: LLM Costs Too High
+
+**Symptom:** High OpenAI API bills
+
+**Workaround:**
+
+- Use GPT-3.5-turbo instead of GPT-4 for tagging
+- Implement smart caching (don't re-process unchanged docs)
+- Batch API calls when possible
+- Use smaller context windows (truncate long documents)
+- Consider self-hosted models for some tasks
+
+### Issue 4: Graph "Hairball" Problem
+
+**Symptom:** Too many connections, unusable visualization
+
+**Workaround:**
+
+- Increase similarity thresholds
+- Filter out common entities (use TF-IDF)
+- Implement edge bundling in visualization
+- Show only top N most important connections
+- Add UI controls to hide/show edge types
+
+## Testing Strategy
+
+### Unit Tests
+
+- Similarity calculation (cosine_similarity function)
+- Entity resolution (canonical matching)
+- Text chunking (for embeddings)
+- File conversion (each format)
+
+### Integration Tests
+
+- Full pipeline (upload → graph)
+- API endpoints (all CRUD operations)
+- Neo4j queries (complex Cypher)
+- Frontend components (React Testing Library)
+
+### End-to-End Tests
+
+- Upload document → verify appears in graph
+- Search functionality → verify results
+- Click entity → verify related docs shown
+- Update document → verify graph updates
+
+## Deployment Checklist
+
+Before deploying to production:
+
+- [ ] Environment variables configured
+- [ ] Neo4j database backed up
+- [ ] PostgreSQL database backed up
+- [ ] Google OAuth credentials set up
+- [ ] Celery workers running and monitored
+- [ ] Redis configured and monitored
+- [ ] Logging and error tracking enabled (Sentry)
+- [ ] API rate limiting configured
+- [ ] Frontend build optimized (code splitting)
+- [ ] SSL certificates installed
+- [ ] Monitoring dashboards created (Grafana)
+- [ ] Database indexes created
+- [ ] Backup automation configured
+- [ ] CI/CD pipeline tested
+
+## Useful Commands
+
+### Development
+
 ```bash
-make format             # Format with black (backend) and prettier (frontend)
-make lint               # Run ruff (backend) and eslint (frontend)
-make typecheck          # Run mypy (backend) and tsc (frontend)
-make check              # Run format, lint, typecheck, and test
-make test               # Run all tests
+# Start backend
+uvicorn main:app --reload
+
+# Start Celery worker
+celery -A tasks worker --loglevel=info
+
+# Start Redis
+redis-server
+
+# Start Neo4j
+docker run -p 7474:7474 -p 7687:7687 neo4j
+
+# Start frontend
+npm run dev
 ```
 
-### Database Operations
+### Database
+
 ```bash
-make db-migrate         # Create new Alembic migration (prompts for message)
-make db-upgrade         # Apply pending migrations
-make db-downgrade       # Rollback last migration
-make db-shell           # Open psql shell to semantic_graph database
-make db-reset           # Destroy and recreate database (WARNING: data loss)
+# Neo4j Cypher Shell
+cypher-shell -u neo4j -p password
+
+# PostgreSQL
+psql -U postgres -d knowledge_graph
+
+# Backup Neo4j
+neo4j-admin dump --database=neo4j --to=/backups/graph.dump
+
+# Restore Neo4j
+neo4j-admin load --from=/backups/graph.dump --database=neo4j --force
 ```
 
-### Troubleshooting
+### Debugging
+
 ```bash
-make docker-rebuild     # Rebuild containers after dependency changes
-make docker-logs-backend # View backend logs only
-make docker-status      # Check container status
-make clean              # Remove cache files
+# View Celery tasks
+celery -A tasks inspect active
+
+# Check Redis queue
+redis-cli LLEN file_change_queue
+
+# Tail logs
+tail -f logs/api.log
+tail -f logs/celery.log
+
+# Monitor Neo4j queries
+CALL dbms.listQueries();
 ```
 
-## Database Schema
+## When Asking Claude for Help
 
-### Core Tables
+### Provide Context Like:
 
-**files** - Document storage
-```sql
-id                  UUID PRIMARY KEY
-google_drive_id     VARCHAR(255) UNIQUE NOT NULL (indexed)
-name                VARCHAR(500) NOT NULL
-mime_type           VARCHAR(100)
-size_bytes          BIGINT
-text_content        TEXT
-processing_status   VARCHAR(50) DEFAULT 'pending' (indexed)
-created_at          TIMESTAMP
-modified_at         TIMESTAMP
-```
+- "I'm working on the entity recognition component"
+- "This is for the graph visualization layer"
+- "I'm debugging why similarities aren't being calculated"
+- "I need to optimize this Cypher query"
 
-**tags** - Extracted keywords with categories
-```sql
-id              UUID PRIMARY KEY
-name            VARCHAR(100) UNIQUE NOT NULL (indexed)
-category        VARCHAR(50) (indexed)  -- technology, finance, business, etc.
-usage_count     INTEGER DEFAULT 0      -- number of files using this tag
-created_at      TIMESTAMP
-```
+### Include Relevant Information:
 
-**file_tags** - Many-to-many file↔tag mapping
-```sql
-file_id          UUID FK → files.id ON DELETE CASCADE (PK)
-tag_id           UUID FK → tags.id ON DELETE CASCADE (PK)
-relevance_score  FLOAT DEFAULT 1.0  -- how relevant the tag is to the document
-```
+- Error messages and stack traces
+- Relevant code snippets
+- Expected vs actual behavior
+- Steps already tried
+- Current graph size / dataset size
 
-**file_relationships** - Tag-based connections
-```sql
-id                  UUID PRIMARY KEY
-source_file_id      UUID FK → files.id ON DELETE CASCADE
-target_file_id      UUID FK → files.id ON DELETE CASCADE
-shared_tag_count    INTEGER NOT NULL (indexed)  -- number of tags in common
-similarity_score    FLOAT (0.0-1.0, indexed)    -- Jaccard similarity
-relationship_type   VARCHAR(50) DEFAULT 'tag_similarity'
-created_at          TIMESTAMP
+### Ask Specific Questions:
 
-CONSTRAINTS:
-  - source_file_id ≠ target_file_id (no self-relationships)
-  - UNIQUE(source_file_id, target_file_id)
-  - similarity_score BETWEEN 0.0 AND 1.0
-  - shared_tag_count >= 0
-```
+✅ "How can I optimize this cosine similarity calculation for 10,000 documents?"
+✅ "What's the best way to deduplicate entities with similar names?"
+✅ "How should I structure this Cypher query to find documents 2 hops away?"
 
-**clusters** - Auto-discovered document groups
-```sql
-id          UUID PRIMARY KEY
-label       VARCHAR(255)  -- Auto-generated from content
-created_at  TIMESTAMP
-```
+❌ "How do I make it faster?" (too vague)
+❌ "Fix my code" (no context)
+❌ "It's not working" (not specific)
 
-**file_clusters** - Many-to-many file↔cluster mapping
-```sql
-file_id     UUID FK → files.id ON DELETE CASCADE (PK)
-cluster_id  UUID FK → clusters.id ON DELETE CASCADE (PK)
-```
+## Project Resources
 
-**processing_jobs** - Background job tracking
-```sql
-id                   UUID PRIMARY KEY
-folder_id            VARCHAR(255)
-status               VARCHAR(50) DEFAULT 'queued' (indexed)
-progress_percentage  INTEGER DEFAULT 0
-total_files          INTEGER DEFAULT 0
-processed_files      INTEGER DEFAULT 0
-error_message        TEXT
-created_at           TIMESTAMP
-completed_at         TIMESTAMP
-```
+- **Project Proposal:** See `project_proposal.md` for full system design
+- **Pipeline Walkthrough:** See `pipeline_walkthrough.md` for step-by-step processing flow
+- **Original Inspiration:** See original document for initial architecture ideas
 
-### Key Features
+## Quick Reference: Key Algorithms
 
-✅ **Tag-Based Relationships**: Documents connected by shared keywords and categories
-✅ **CASCADE Deletes**: Deleting files auto-removes tags, relationships, and cluster mappings
-✅ **Data Integrity**: Constraints prevent self-relationships, duplicate pairs, and invalid scores
-✅ **Performance Indexes**: Optimized for tag lookups, shared tag counting, and status filtering
-✅ **Category Classification**: Automatic categorization into 8 broad domains (technology, finance, etc.)
+### Cosine Similarity
 
-## Tag-Based Processing Pipeline
-
-The tag-based processing pipeline is implemented in [app/services/semantic.py](backend/app/services/semantic.py) as `SemanticProcessingService` (renamed but still uses this class name for backward compatibility). Tag extraction is handled by [app/services/tag_extraction.py](backend/app/services/tag_extraction.py).
-
-### Using the Processing Service
-
-**Direct Usage (Synchronous)**:
 ```python
-from app.services.semantic import SemanticProcessingService
-from app.core.database import SessionLocal
-
-# Initialize service
-service = SemanticProcessingService(
-    min_shared_tags=2,        # Minimum shared tags for relationships
-    min_tag_frequency=2,      # Minimum word frequency for tags
-    max_tags_per_doc=10,      # Maximum tags per document
-)
-
-# Process documents through full pipeline
-db = SessionLocal()
-results = service.process_documents(
-    session=db,
-    files=files,  # List of File objects with text_content
-    min_shared=2,
-    show_progress=True,
-)
-
-# Results contain:
-# - file_tags: dict mapping file_id to list of (Tag, relevance) tuples
-# - relationships: list of FileRelationship objects
-# - clusters: list of (Cluster, files) tuples
-# - adjacency: graph adjacency dict
+similarity = dot(A, B) / (norm(A) * norm(B))
+threshold = 0.85  # Adjustable by document type
 ```
 
-**API Usage (Asynchronous via Celery)**:
-```bash
-# Full pipeline: tag extraction + relationships + clustering
-POST /api/v1/semantic/process
-{
-  "file_ids": ["uuid1", "uuid2", ...],
-  "min_shared_tags": 2,
-  "create_job": true
-}
+### Entity Canonicalization
 
-# Step-by-step processing
-POST /api/v1/semantic/tags              # Step 1: Extract tags
-POST /api/v1/semantic/relationships     # Step 2: Create relationships
-POST /api/v1/semantic/cluster           # Step 3: Cluster using community detection
-
-# Check task status
-GET /api/v1/semantic/task/{task_id}
-```
-
-### Pipeline Steps
-
-### 1. Document Ingestion
 ```python
-# User provides Google Drive folder → Celery job created
-ProcessingJob(folder_id="...", status="queued", total_files=0)
+# Fuzzy matching with Levenshtein distance
+if levenshtein("Bob Smith", "Robert Smith") < 3:
+    canonical = "Robert Smith"
 ```
 
-### 2. Text Extraction
-```python
-# PDF/DOCX/XLSX → raw text
-File(google_drive_id="...", text_content="...", processing_status="processing")
+### Community Detection
+
+```cypher
+// Louvain algorithm in Neo4j
+CALL gds.louvain.write('graph', {
+    writeProperty: 'community',
+    relationshipWeightProperty: 'score'
+})
 ```
 
-### 3. Tag Extraction
-```python
-# TagExtractionService extracts keywords and categorizes documents
-from app.services.tag_extraction import TagExtractionService
+## Success Metrics to Track
 
-extractor = TagExtractionService()
-tags = extractor.extract_tags(text)
-# → [(tag_name, category, relevance_score), ...]
-# Example: [("machine", "technology", 0.87), ("learning", "technology", 0.82)]
-```
+- **Processing Time:** <5 min per document average
+- **Similarity Precision:** >80% relevant suggestions
+- **Entity Accuracy:** >85% confirmed correct
+- **User Engagement:** 3+ graph explorations per week
+- **Discovery Rate:** 5+ unknown related docs found per session
 
-Categories detected:
-- `technology`, `finance`, `business`, `human_resources`
-- `legal`, `marketing`, `operations`, `research`
+---
 
-### 4. Relationship Discovery
-```python
-# Create relationships based on shared tags
-relationships, adjacency = service.create_relationships_with_graph(
-    session=db,
-    files=files,
-    min_shared=2,  # Only relationships with >= 2 shared tags
-)
-# Returns: relationships list + adjacency graph for clustering
-# Similarity score = Jaccard similarity = |shared_tags| / |union_tags|
-```
+**Remember:** This is a complex system with many moving parts. When in doubt:
 
-### 5. Community-Based Clustering
-```python
-# Use Louvain algorithm to find natural communities in relationship graph
-clusters = service.create_clusters_from_communities(
-    session=db,
-    files=files,
-    adjacency=adjacency,  # Graph from step 4
-)
+1. Check the logs
+2. Review the graph state in Neo4j Browser
+3. Test each layer independently
+4. Use the monitoring dashboards
+5. Ask Claude with specific context!
 
-# Auto-generate cluster names from most common tags
-# Example: "Technology & Machine & Learning (15 docs)"
-# Example: "Finance & Budget (8 docs)"
-```
-
-### 6. Graph Visualization
-```python
-# Frontend receives:
-# - Nodes: files with metadata
-# - Edges: relationships with similarity scores
-# - Clusters: communities with semantic labels
-# react-force-graph renders interactive visualization
-```
-
-### Key Algorithm Changes
-
-**System Migration (2025-10-12)**: From embedding-based to tag-based
-- **Previous**: ML embeddings + cosine similarity (sentence-transformers)
-- **Current**: Keyword extraction + tag matching (NLTK + TF-IDF)
-- **Benefits**: More transparent, explainable, and lightweight
-- **See**: [TAG_SYSTEM_MIGRATION.md](TAG_SYSTEM_MIGRATION.md) for full details
-
-**Clustering Algorithm (Community Detection)**: Uses Louvain on relationship graph
-- Discovers natural communities based on tag-based connections
-- More robust and semantically meaningful than distance-based clustering
-- Default: min_shared_tags=2 creates appropriate sparsity
-
-## Demo & Testing
-
-### Run Demos
-
-```bash
-# Small demo (11 realistic documents)
-make demo
-
-# Large-scale demo (100 documents)
-make demo-large
-
-# Full scaling tests (50, 100, 250, 500 documents)
-make demo-scale
-
-# Custom size (e.g., 250 documents)
-make demo-custom NUM=250
-```
-
-**Small Demo** (`make demo`):
-- 11 realistic documents (ML papers, financial reports, meeting notes, HR docs)
-- Relationships based on shared tags (min_shared_tags: 2)
-- 4-5 clusters with auto-generated names like "Technology & Machine & Learning", "Finance & Budget"
-- 0-2 outliers (documents that don't share enough tags with others)
-
-**Large-Scale Demo** (`make demo-large`):
-- 100 synthetic documents across 8 topic areas
-- Performance metrics: tag extraction speed, database insertion, relationship creation
-- Clustering analysis: discovers 5-10 semantic clusters
-- Memory usage tracking
-- Scalability projections for larger datasets (500-10,000 docs)
-
-**Kaggle PDF Demo** (`make demo-kaggle`):
-- Uses real PDF documents from Kaggle dataset
-- Extracts text from actual PDFs (not synthetic)
-- Tests system with real-world document formats
-- Validates text extraction and clustering quality
-- Requires Kaggle API credentials: `~/.kaggle/kaggle.json`
-- Get credentials from [kaggle.com/settings](https://www.kaggle.com/settings)
-- Accept [dataset terms](https://www.kaggle.com/datasets/manisha717/dataset-of-pdf-files)
-
-### Run Tests
-```bash
-# All tests
-make test
-
-# Backend model tests only
-docker exec ai-rel-graph-backend pytest tests/models/ -v --cov=app.models
-
-# Create test database first
-docker exec ai-rel-graph-postgres psql -U postgres -c "CREATE DATABASE semantic_graph_test;"
-docker exec ai-rel-graph-postgres psql -U postgres -d semantic_graph_test -c "CREATE EXTENSION vector;"
-```
-
-**Test Coverage**:
-- 35+ model tests validating constraints, indexes, and CASCADE deletes
-- 40+ service tests for tag extraction, relationships, and clustering
-- Tests use real PostgreSQL (no longer requires pgvector extension)
-- Validates tag extraction quality, shared tag counting, community detection
-- Tests located in [backend/tests/](backend/tests/)
-- **Note**: Tests need updating after tag-based migration
-
-### Visualize Results
-
-After running a demo, visualize the semantic graph using [visualize_graph.py](backend/visualize_graph.py):
-
-```bash
-# Interactive visualization (spring layout)
-make visualize
-
-# Circular cluster layout
-make visualize-circular
-
-# Cluster statistics
-make visualize-stats
-
-# Save to file
-make visualize-save FILE=my_graph.png
-
-# Generate all visualizations
-make visualize-all  # Creates graph_spring.png, graph_circular.png, graph_stats.png
-```
-
-**What you'll see**:
-- **Nodes**: Documents sized by connection count
-- **Edges**: Relationships with thickness = similarity strength
-- **Colors**: Each community/cluster has distinct color
-- **Legend**: Cluster names with document counts
-
-**Layout Options**:
-- **Spring Layout**: Force-directed positioning shows natural relationships
-- **Circular Layout**: Groups clusters in circles for clear visual separation
-
-**Statistics View**:
-- Documents per cluster (horizontal bar chart)
-- Relationship distribution (within vs between clusters)
-
-### Database Exploration
-
-```bash
-# Connect to database
-docker exec -it ai-rel-graph-postgres psql -U postgres -d semantic_graph_demo
-
-# Useful queries
-SELECT * FROM clusters;
-SELECT COUNT(*) FROM file_relationships;
-SELECT f1.name, f2.name, fr.similarity_score
-FROM file_relationships fr
-JOIN files f1 ON fr.source_file_id = f1.id
-JOIN files f2 ON fr.target_file_id = f2.id
-ORDER BY fr.similarity_score DESC LIMIT 10;
-```
-
-## Environment Configuration
-
-**Backend** (`backend/.env`):
-```bash
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=semantic_graph
-
-REDIS_HOST=redis
-REDIS_PORT=6379
-
-CELERY_BROKER_URL=redis://redis:6379/0
-CELERY_RESULT_BACKEND=redis://redis:6379/0
-
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
-
-# Tag extraction parameters (optional, have defaults)
-MIN_SHARED_TAGS=2           # Minimum shared tags for relationships (default: 2)
-MIN_TAG_FREQUENCY=2         # Minimum word frequency for tag extraction (default: 2)
-MAX_TAGS_PER_DOC=10         # Maximum tags per document (default: 10)
-```
-
-**Frontend** (`frontend/.env.local`):
-```bash
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_WS_URL=ws://localhost:8000
-```
-
-## Important Implementation Details
-
-### Database Migrations
-Always create migrations when modifying models:
-```bash
-make db-migrate  # Creates migration in backend/alembic/versions/
-make db-upgrade  # Applies migration
-```
-
-### Celery Tasks
-Tasks are defined in [app/workers/tasks.py](backend/app/workers/tasks.py) and must be imported in `app/core/celery_app.py` include list. The Celery worker runs in a separate Docker container.
-
-**Available Tag-Based Processing Tasks**:
-- `process_files_with_tags`: Full pipeline (tag extraction + relationships + clustering)
-- `extract_tags_task`: Step 1 - Extract tags from files
-- `create_tag_relationships`: Step 2 - Create relationships based on shared tags
-- `cluster_documents`: Step 3 - Cluster files using community detection
-
-**Deprecated Tasks** (for backward compatibility):
-- `process_files_semantically` → redirects to `process_files_with_tags`
-- `generate_embeddings` → redirects to `extract_tags_task`
-- `create_semantic_relationships` → redirects to `create_tag_relationships`
-
-All tasks support:
-- Automatic retry on failure (max 3 retries)
-- Integration with ProcessingJob for progress tracking
-- Rollback on error to maintain database consistency
-
-### API Development
-API endpoints go in `app/api/v1/`. The main FastAPI app is in `app/main.py`. CORS is configured to allow origins from ALLOWED_ORIGINS in settings.
-
-**Tag-Based Processing Endpoints** ([app/api/v1/semantic.py](backend/app/api/v1/semantic.py)):
-- `POST /api/v1/semantic/process` - Full tag-based pipeline (async)
-- `POST /api/v1/semantic/tags` - Extract tags only
-- `POST /api/v1/semantic/relationships` - Create relationships based on shared tags
-- `POST /api/v1/semantic/cluster` - Cluster documents only
-- `GET /api/v1/semantic/task/{task_id}` - Check async task status
-
-All endpoints validate input, return task IDs for monitoring, and provide detailed error messages.
-
-### Frontend Routing
-Next.js App Router: pages are in `frontend/src/app/` with route structure based on directory names (e.g., `app/graph/page.tsx` → `/graph`).
-
-### Database Setup
-PostgreSQL is used for structured data storage. No special extensions required (pgvector was removed in tag-based migration).
-
-### Clustering Algorithm
-Community detection (Louvain algorithm) is used for automatic cluster discovery:
-- **Input**: Relationship graph based on shared tags
-- **Algorithm**: Louvain community detection via NetworkX
-- **Fallback**: Connected components if NetworkX unavailable
-- **Resolution**: 1.0 (standard modularity optimization)
-
-The algorithm discovers natural communities in the tag-based relationship graph, producing semantically meaningful clusters based on shared topics and categories.
-
-## Package Management
-
-- **Backend**: Poetry (`poetry add <package>`, `poetry install`)
-- **Frontend**: pnpm (`pnpm add <package>`, `pnpm install`)
-
-After adding dependencies, run `make docker-rebuild` to rebuild containers.
-
-## Service URLs
-- **Frontend**: http://localhost
-- **Backend API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
-- **PostgreSQL**: localhost:5432 (database: semantic_graph, user: postgres)
-- **Redis**: localhost:6379
-
-## Troubleshooting
-
-**Containers won't start**: Check Docker is running, run `make docker-status`
-**Database connection errors**: Ensure PostgreSQL container is healthy, check logs
-**pgvector errors**: Verify extension is enabled (`\dx` in psql)
-**Import errors**: Run `make docker-rebuild` after adding dependencies
-**Migration conflicts**: Check `alembic/versions/` for duplicate revisions
+Good luck building! 🚀

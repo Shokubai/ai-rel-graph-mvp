@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # NextAuth JWT Secret (shared with frontend)
     NEXTAUTH_SECRET: str = ""
 
+    # OpenAI (for Phase 2 - embeddings)
+    OPENAI_API_KEY: str = ""
+
     # CORS
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost"]
 

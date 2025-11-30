@@ -2,12 +2,17 @@
 
 import { useSession, signIn, signOut } from "next-auth/react";
 import { useListDriveFiles, useSearchDriveFiles } from "@/hooks/useGoogleDrive";
+import {
+  useStartProcessing,
+  useProcessingStatus,
+} from "@/hooks/useFileProcessing";
 import { useState } from "react";
 
 export function DriveFileBrowser() {
   const { data: session, status } = useSession();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFolderId, setSelectedFolderId] = useState<string>();
+  const [processingTaskId, setProcessingTaskId] = useState<string>();
 
   // List files from current folder
   const {
@@ -19,6 +24,22 @@ export function DriveFileBrowser() {
   // Search functionality
   const { data: searchResults, isLoading: isSearching } =
     useSearchDriveFiles(searchQuery);
+
+  // Processing functionality
+  const startProcessing = useStartProcessing();
+  const { data: processingStatus } = useProcessingStatus(processingTaskId);
+
+  // Handle start processing
+  const handleStartProcessing = async () => {
+    try {
+      const result = await startProcessing.mutateAsync({
+        folder_id: selectedFolderId,
+      });
+      setProcessingTaskId(result.task_id);
+    } catch (error) {
+      console.error("Failed to start processing:", error);
+    }
+  };
 
   // Show sign in button if not authenticated
   if (status === "unauthenticated") {
@@ -82,6 +103,81 @@ export function DriveFileBrowser() {
           className="w-full px-4 py-2 border rounded"
         />
       </div>
+
+      {/* Process Files Button */}
+      <div className="mb-4">
+        <button
+          onClick={handleStartProcessing}
+          disabled={startProcessing.isPending || processingStatus?.state === "PROCESSING"}
+          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+        >
+          {startProcessing.isPending
+            ? "Starting..."
+            : processingStatus?.state === "PROCESSING"
+            ? "Processing..."
+            : "Process Files"}
+        </button>
+        <span className="ml-2 text-sm text-gray-600">
+          {selectedFolderId ? "Process files in current folder" : "Process all Drive files"}
+        </span>
+      </div>
+
+      {/* Processing Status */}
+      {processingStatus && (
+        <div className="mb-4 p-4 border rounded bg-gray-50">
+          <h3 className="font-bold mb-2">Processing Status</h3>
+
+          {processingStatus.state === "PENDING" && (
+            <div className="text-gray-600">Waiting to start...</div>
+          )}
+
+          {processingStatus.state === "PROCESSING" && (
+            <div>
+              <div className="mb-2">
+                <span className="font-medium">Progress: </span>
+                {processingStatus.current}/{processingStatus.total} files
+              </div>
+              <div className="mb-2">
+                <span className="font-medium">Current file: </span>
+                {processingStatus.current_file}
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div
+                  className="bg-green-600 h-2 rounded-full transition-all"
+                  style={{
+                    width: `${((processingStatus.current || 0) / (processingStatus.total || 1)) * 100}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {processingStatus.state === "SUCCESS" && processingStatus.result && (
+            <div className="text-green-600">
+              <div className="font-bold mb-2">✓ Processing Complete!</div>
+              <div className="text-sm space-y-1">
+                <div>Files processed: {processingStatus.result.stats.processed}</div>
+                <div>Total words: {processingStatus.result.stats.total_words.toLocaleString()}</div>
+                <div>
+                  Average words per file: {processingStatus.result.stats.average_words.toLocaleString()}
+                </div>
+                {processingStatus.result.stats.failed > 0 && (
+                  <div className="text-red-600">
+                    Failed: {processingStatus.result.stats.failed} files
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {processingStatus.state === "FAILURE" && (
+            <div className="text-red-600">
+              <div className="font-bold">✗ Processing Failed</div>
+              <div className="text-sm mt-1">{processingStatus.error}</div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Loading state */}
       {(isLoading || isSearching) && <div>Loading files...</div>}
