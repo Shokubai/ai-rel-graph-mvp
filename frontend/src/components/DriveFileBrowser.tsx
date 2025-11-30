@@ -6,13 +6,22 @@ import {
   useStartProcessing,
   useProcessingStatus,
 } from "@/hooks/useFileProcessing";
-import { useState } from "react";
+import {
+  useGenerateGraph,
+  useGraphGenerationStatus,
+} from "@/hooks/useGraph";
+import { useState, useEffect } from "react";
 
-export function DriveFileBrowser() {
+interface DriveFileBrowserProps {
+  onGraphGenerated?: () => void;
+}
+
+export function DriveFileBrowser({ onGraphGenerated }: DriveFileBrowserProps) {
   const { data: session, status } = useSession();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFolderId, setSelectedFolderId] = useState<string>();
   const [processingTaskId, setProcessingTaskId] = useState<string>();
+  const [graphTaskId, setGraphTaskId] = useState<string>();
 
   // List files from current folder
   const {
@@ -29,6 +38,10 @@ export function DriveFileBrowser() {
   const startProcessing = useStartProcessing();
   const { data: processingStatus } = useProcessingStatus(processingTaskId);
 
+  // Graph generation functionality
+  const generateGraph = useGenerateGraph();
+  const { data: graphStatus } = useGraphGenerationStatus(graphTaskId);
+
   // Handle start processing
   const handleStartProcessing = async () => {
     try {
@@ -40,6 +53,41 @@ export function DriveFileBrowser() {
       console.error("Failed to start processing:", error);
     }
   };
+
+  // Handle graph generation
+  const handleGenerateGraph = async () => {
+    try {
+      const result = await generateGraph.mutateAsync({
+        documents_file: "processed_files/extracted_documents.json",
+        use_top_k_similarity: true,
+        top_k_neighbors: 3,
+        min_similarity: 0.3,
+      });
+      setGraphTaskId(result.task_id);
+    } catch (error) {
+      console.error("Failed to generate graph:", error);
+    }
+  };
+
+  // Auto-trigger graph generation when processing completes successfully
+  useEffect(() => {
+    if (
+      processingStatus?.state === "SUCCESS" &&
+      !graphTaskId &&
+      !generateGraph.isPending
+    ) {
+      handleGenerateGraph();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processingStatus?.state]);
+
+  // Notify parent when graph generation completes
+  useEffect(() => {
+    if (graphStatus?.state === "SUCCESS" && onGraphGenerated) {
+      onGraphGenerated();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphStatus?.state]);
 
   // Show sign in button if not authenticated
   if (status === "unauthenticated") {
@@ -104,8 +152,8 @@ export function DriveFileBrowser() {
         />
       </div>
 
-      {/* Process Files Button */}
-      <div className="mb-4">
+      {/* Action Buttons */}
+      <div className="mb-4 flex gap-2">
         <button
           onClick={handleStartProcessing}
           disabled={startProcessing.isPending || processingStatus?.state === "PROCESSING"}
@@ -117,7 +165,18 @@ export function DriveFileBrowser() {
             ? "Processing..."
             : "Process Files"}
         </button>
-        <span className="ml-2 text-sm text-gray-600">
+        <button
+          onClick={handleGenerateGraph}
+          disabled={generateGraph.isPending || graphStatus?.state === "PROCESSING"}
+          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+        >
+          {generateGraph.isPending
+            ? "Starting..."
+            : graphStatus?.state === "PROCESSING"
+            ? "Generating..."
+            : "Generate Graph"}
+        </button>
+        <span className="ml-2 text-sm text-gray-600 self-center">
           {selectedFolderId ? "Process files in current folder" : "Process all Drive files"}
         </span>
       </div>
@@ -174,6 +233,45 @@ export function DriveFileBrowser() {
             <div className="text-red-600">
               <div className="font-bold">✗ Processing Failed</div>
               <div className="text-sm mt-1">{processingStatus.error}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Graph Generation Status */}
+      {graphStatus && (
+        <div className="mb-4 p-4 border rounded bg-blue-50">
+          <h3 className="font-bold mb-2">Graph Generation Status</h3>
+
+          {graphStatus.state === "PENDING" && (
+            <div className="text-gray-600">Waiting to start graph generation...</div>
+          )}
+
+          {graphStatus.state === "PROCESSING" && (
+            <div>
+              <div className="mb-2 text-blue-600">
+                Generating knowledge graph...
+              </div>
+              {graphStatus.status && (
+                <div className="text-sm text-gray-700">{graphStatus.status}</div>
+              )}
+            </div>
+          )}
+
+          {graphStatus.state === "SUCCESS" && graphStatus.result && (
+            <div className="text-green-600">
+              <div className="font-bold mb-2">✓ Graph Generated!</div>
+              <div className="text-sm space-y-1">
+                <div>Nodes: {graphStatus.result.stats.total_nodes}</div>
+                <div>Edges: {graphStatus.result.stats.total_edges}</div>
+              </div>
+            </div>
+          )}
+
+          {graphStatus.state === "FAILURE" && (
+            <div className="text-red-600">
+              <div className="font-bold">✗ Graph Generation Failed</div>
+              <div className="text-sm mt-1">{graphStatus.error}</div>
             </div>
           )}
         </div>
