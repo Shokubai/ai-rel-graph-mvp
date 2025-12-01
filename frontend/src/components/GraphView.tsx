@@ -50,6 +50,9 @@ export function GraphView({ uploadedData }: GraphViewProps) {
   const [lowLevelTagSearch, setLowLevelTagSearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
 
+  // Legend/tutorial state
+  const [legendExpanded, setLegendExpanded] = useState(true);
+
   // Extract graph data from API response or uploaded data with useMemo
   const graphData = useMemo(() => {
     // Prefer uploaded data if available
@@ -602,66 +605,208 @@ export function GraphView({ uploadedData }: GraphViewProps) {
   }
 
   return (
-    <div className="relative w-full h-screen bg-gray-900">
-      <svg ref={svgRef} className="w-full h-full" />
+    <div className="flex w-full h-full bg-gray-900">
+      {/* Graph container */}
+      <div className="relative flex-1">
+        <svg ref={svgRef} className="w-full h-full" />
 
-      {/* Search panel toggle button */}
-      <button
-        onClick={() => setSearchPanelOpen(!searchPanelOpen)}
-        className={`fixed top-4 bg-blue-600 text-white p-3 rounded-lg shadow-lg hover:bg-blue-700 transition-all duration-300 z-30 ${
-          searchPanelOpen ? "right-[25rem]" : "right-4"
-        }`}
-        title="Toggle search panel"
-      >
-        <svg
-          className="w-5 h-5"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
+        {/* Search panel toggle button */}
+        <button
+          onClick={() => setSearchPanelOpen(!searchPanelOpen)}
+          className="absolute top-4 right-4 bg-blue-600 text-white p-3 rounded-lg shadow-lg hover:bg-blue-700 transition-all duration-300 z-30"
+          title="Toggle search panel"
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-          />
-        </svg>
-      </button>
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+            />
+          </svg>
+        </button>
 
-      {/* Search and filter panel */}
-      <div
-        className={`fixed top-0 right-0 h-full bg-white shadow-2xl transition-transform duration-300 ease-in-out z-20 ${
-          searchPanelOpen ? "translate-x-0" : "translate-x-full"
-        } w-96 overflow-y-auto`}
-      >
-        <div className="p-6">
-          {/* Header */}
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-gray-800">Search & Filter</h2>
-            <button
-              onClick={() => setSearchPanelOpen(false)}
-              className="text-gray-500 hover:text-gray-700 text-2xl"
-            >
-              ✕
-            </button>
+        {/* Node detail panel */}
+        {selectedNode && (
+          <div
+            className="absolute top-4 left-4 w-80 bg-gray-950 border border-gray-800 rounded-lg shadow-lg p-4 max-h-[calc(100vh-120px)] overflow-y-auto z-10"
+          >
+            <div className="flex justify-between items-start mb-2">
+              <h2 className="text-lg font-bold text-white">{selectedNode.title}</h2>
+              <button
+                onClick={() => setSelectedNode(null)}
+                className="text-gray-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm">
+              <div>
+                <h3 className="font-semibold text-gray-300">Summary</h3>
+                <p className="text-gray-400">{selectedNode.summary}</p>
+              </div>
+
+              {/* High-Level Tags */}
+              {selectedNode.tags.high_level.length > 0 && (
+                <div>
+                  <h3 className="font-semibold text-gray-300">High-Level Tags</h3>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {selectedNode.tags.high_level.map((tag, i) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          toggleTag(tag);
+                          setSearchPanelOpen(true);
+                        }}
+                        className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 transition-colors cursor-pointer font-medium"
+                        title="Click to filter by this high-level tag"
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Low-Level Tags */}
+              {selectedNode.tags.low_level.length > 0 && (
+                <div>
+                  <h3 className="font-semibold text-gray-300">Low-Level Tags</h3>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {selectedNode.tags.low_level.map((tag, i) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          toggleTag(tag);
+                          setSearchPanelOpen(true);
+                        }}
+                        className="px-2 py-1 bg-green-900/50 text-green-300 rounded text-xs hover:bg-green-800/50 transition-colors cursor-pointer border border-green-700"
+                        title="Click to filter by this low-level tag"
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <h3 className="font-semibold text-gray-300">Entities</h3>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {selectedNode.entities.map((entity, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        toggleEntity(entity);
+                        setSearchPanelOpen(true);
+                      }}
+                      className="px-2 py-1 bg-purple-900/50 text-purple-300 rounded text-xs hover:bg-purple-800/50 transition-colors cursor-pointer border border-purple-700"
+                      title="Click to filter by this entity"
+                    >
+                      {entity}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-gray-300">Author</h3>
+                <p className="text-gray-400">{selectedNode.author}</p>
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-gray-300">Last Modified</h3>
+                <p className="text-gray-400">{selectedNode.modified}</p>
+              </div>
+
+              <a
+                href={selectedNode.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block w-full text-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+              >
+                Open Document
+              </a>
+            </div>
           </div>
+        )}
 
-          {/* Search by name */}
-          <div className="mb-6">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
+        {/* Legend/Controls */}
+        <div
+          className={`absolute left-4 bg-gray-950/95 border border-gray-800 rounded-lg shadow-lg max-w-xs transition-all duration-300 ${
+            legendExpanded
+              ? "bottom-4 p-3"
+              : "bottom-4 p-2 cursor-pointer hover:bg-gray-800"
+          }`}
+          onClick={() => !legendExpanded && setLegendExpanded(true)}
+        >
+          {legendExpanded ? (
+            <>
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="text-sm font-semibold text-white">Controls</h3>
+                <button
+                  onClick={() => setLegendExpanded(false)}
+                  className="text-gray-400 hover:text-white text-lg leading-none"
+                  title="Minimize"
+                >
+                  ✕
+                </button>
+              </div>
+              <ul className="text-xs space-y-1 text-gray-300">
+                <li>• Drag nodes to reposition</li>
+                <li>• Scroll to zoom</li>
+                <li>• Click & drag canvas to pan</li>
+                <li>• Hover over nodes to highlight connections</li>
+                <li>• Click nodes for details</li>
+                <li>• Click search icon (top right) to filter graph</li>
+                <li>• Click tags/entities in detail panel to add filters</li>
+              </ul>
+            </>
+          ) : (
+            <div className="text-xs text-gray-400 font-medium">
+              Controls (click to expand)
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Search and filter panel - sidebar */}
+      {searchPanelOpen && (
+        <div className="w-96 bg-gray-950 border-l border-gray-800 shadow-2xl overflow-y-auto flex-shrink-0">
+          <div className="p-6">
+            {/* Header */}
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-white">Search & Filter</h2>
+              <button
+                onClick={() => setSearchPanelOpen(false)}
+                className="text-gray-400 hover:text-white text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Search by name */}
+            <div className="mb-6">
+            <label className="block text-sm font-semibold text-gray-300 mb-2">
               Search Documents
             </label>
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by title, tags, entities, or summary..."
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Search documents..."
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-gray-400"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery("")}
-                className="mt-2 text-sm text-blue-600 hover:text-blue-800"
+                className="mt-2 text-sm text-blue-400 hover:text-blue-300"
               >
                 Clear search
               </button>
@@ -671,13 +816,13 @@ export function GraphView({ uploadedData }: GraphViewProps) {
           {/* Filter by tags */}
           <div className="mb-6">
             <div className="flex justify-between items-center mb-2">
-              <label className="block text-sm font-semibold text-gray-700">
+              <label className="block text-sm font-semibold text-gray-300">
                 Filter by Tags
               </label>
               {selectedTags.size > 0 && (
                 <button
                   onClick={() => setSelectedTags(new Set())}
-                  className="text-xs text-blue-600 hover:text-blue-800"
+                  className="text-xs text-blue-400 hover:text-blue-300"
                 >
                   Clear all
                 </button>
@@ -687,7 +832,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
             {/* High-level tags */}
             {allHighLevelTags.length > 0 && (
               <div className="mb-3">
-                <h4 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <h4 className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wide">
                   High-Level Tags
                 </h4>
                 {/* Search input for high-level tags */}
@@ -695,23 +840,23 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                   type="text"
                   value={highLevelTagSearch}
                   onChange={(e) => setHighLevelTagSearch(e.target.value)}
-                  placeholder="Smart search (e.g., 'eng' finds 'engineering')..."
-                  className="w-full px-3 py-1.5 mb-2 text-sm border border-blue-200 rounded focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                  placeholder="Search tags..."
+                  className="w-full px-3 py-1.5 mb-2 text-sm bg-gray-700 border border-gray-600 text-white rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-gray-400"
                 />
                 <div className="space-y-1 max-h-48 overflow-y-auto">
                   {filteredHighLevelTags.length > 0 ? (
                     filteredHighLevelTags.map((tag) => (
                       <label
                         key={`high-${tag}`}
-                        className="flex items-center space-x-2 cursor-pointer hover:bg-blue-50 p-2 rounded"
+                        className="flex items-center space-x-2 cursor-pointer hover:bg-gray-700 p-2 rounded"
                       >
                         <input
                           type="checkbox"
                           checked={selectedTags.has(tag)}
                           onChange={() => toggleTag(tag)}
-                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          className="w-4 h-4 text-blue-600 border-gray-600 rounded focus:ring-blue-500 bg-gray-700"
                         />
-                        <span className="text-sm text-gray-700 font-medium">{tag}</span>
+                        <span className="text-sm text-white font-medium">{tag}</span>
                         <span className="text-xs text-gray-400 ml-auto">
                           ({graphData.nodes.filter((n) => n.tags.high_level.includes(tag)).length})
                         </span>
@@ -729,7 +874,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
             {/* Low-level tags */}
             {allLowLevelTags.length > 0 && (
               <div>
-                <h4 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                <h4 className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wide">
                   Low-Level Tags
                 </h4>
                 {/* Search input for low-level tags */}
@@ -737,23 +882,23 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                   type="text"
                   value={lowLevelTagSearch}
                   onChange={(e) => setLowLevelTagSearch(e.target.value)}
-                  placeholder="Smart search (finds related & partial matches)..."
-                  className="w-full px-3 py-1.5 mb-2 text-sm border border-green-200 rounded focus:ring-2 focus:ring-green-400 focus:border-transparent"
+                  placeholder="Search tags..."
+                  className="w-full px-3 py-1.5 mb-2 text-sm bg-gray-700 border border-gray-600 text-white rounded focus:ring-2 focus:ring-green-500 focus:border-transparent placeholder-gray-400"
                 />
                 <div className="space-y-1 max-h-48 overflow-y-auto">
                   {filteredLowLevelTags.length > 0 ? (
                     filteredLowLevelTags.map((tag) => (
                       <label
                         key={`low-${tag}`}
-                        className="flex items-center space-x-2 cursor-pointer hover:bg-green-50 p-2 rounded"
+                        className="flex items-center space-x-2 cursor-pointer hover:bg-gray-700 p-2 rounded"
                       >
                         <input
                           type="checkbox"
                           checked={selectedTags.has(tag)}
                           onChange={() => toggleTag(tag)}
-                          className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                          className="w-4 h-4 text-green-600 border-gray-600 rounded focus:ring-green-500 bg-gray-700"
                         />
-                        <span className="text-sm text-gray-700">{tag}</span>
+                        <span className="text-sm text-white">{tag}</span>
                         <span className="text-xs text-gray-400 ml-auto">
                           ({graphData.nodes.filter((n) => n.tags.low_level.includes(tag)).length})
                         </span>
@@ -776,13 +921,13 @@ export function GraphView({ uploadedData }: GraphViewProps) {
           {/* Filter by entities */}
           <div className="mb-6">
             <div className="flex justify-between items-center mb-2">
-              <label className="block text-sm font-semibold text-gray-700">
+              <label className="block text-sm font-semibold text-gray-300">
                 Filter by Entities
               </label>
               {selectedEntities.size > 0 && (
                 <button
                   onClick={() => setSelectedEntities(new Set())}
-                  className="text-xs text-blue-600 hover:text-blue-800"
+                  className="text-xs text-blue-400 hover:text-blue-300"
                 >
                   Clear all
                 </button>
@@ -793,23 +938,23 @@ export function GraphView({ uploadedData }: GraphViewProps) {
               type="text"
               value={entitySearch}
               onChange={(e) => setEntitySearch(e.target.value)}
-              placeholder="Smart search entities (fuzzy & related terms)..."
-              className="w-full px-3 py-2 mb-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-purple-400 focus:border-transparent"
+              placeholder="Search entities..."
+              className="w-full px-3 py-2 mb-2 text-sm bg-gray-700 border border-gray-600 text-white rounded focus:ring-2 focus:ring-purple-500 focus:border-transparent placeholder-gray-400"
             />
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {filteredEntities.length > 0 ? (
                 filteredEntities.map((entity) => (
                   <label
                     key={entity}
-                    className="flex items-center space-x-2 cursor-pointer hover:bg-gray-50 p-2 rounded"
+                    className="flex items-center space-x-2 cursor-pointer hover:bg-gray-700 p-2 rounded"
                   >
                     <input
                       type="checkbox"
                       checked={selectedEntities.has(entity)}
                       onChange={() => toggleEntity(entity)}
-                      className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                      className="w-4 h-4 text-green-600 border-gray-600 rounded focus:ring-green-500 bg-gray-700"
                     />
-                    <span className="text-sm text-gray-700">{entity}</span>
+                    <span className="text-sm text-white">{entity}</span>
                     <span className="text-xs text-gray-400 ml-auto">
                       ({graphData.nodes.filter((n) => n.entities.includes(entity)).length})
                     </span>
@@ -825,17 +970,17 @@ export function GraphView({ uploadedData }: GraphViewProps) {
 
           {/* Active filters summary */}
           {(searchQuery || selectedTags.size > 0 || selectedEntities.size > 0) && (
-            <div className="mb-6 p-4 bg-blue-50 rounded-lg">
+            <div className="mb-6 p-4 bg-gray-700 rounded-lg border border-gray-600">
               <div className="flex justify-between items-center mb-2">
-                <h3 className="text-sm font-semibold text-gray-700">Active Filters</h3>
+                <h3 className="text-sm font-semibold text-white">Active Filters</h3>
                 <button
                   onClick={clearAllFilters}
-                  className="text-xs text-red-600 hover:text-red-800"
+                  className="text-xs text-red-400 hover:text-red-300"
                 >
                   Clear all filters
                 </button>
               </div>
-              <div className="space-y-1 text-xs text-gray-600">
+              <div className="space-y-1 text-xs text-gray-300">
                 {searchQuery && (
                   <div>Search: &quot;{searchQuery}&quot;</div>
                 )}
@@ -845,7 +990,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                 {selectedEntities.size > 0 && (
                   <div>Entities: {selectedEntities.size} selected</div>
                 )}
-                <div className="mt-2 font-semibold text-gray-700">
+                <div className="mt-2 font-semibold text-white">
                   Showing{" "}
                   {graphData.nodes.filter(shouldHighlightNode).length} /{" "}
                   {graphData.nodes.length} nodes
@@ -854,131 +999,8 @@ export function GraphView({ uploadedData }: GraphViewProps) {
             </div>
           )}
         </div>
-      </div>
-
-      {/* Node detail panel */}
-      {selectedNode && (
-        <div
-          className={`absolute top-4 w-80 bg-white rounded-lg shadow-lg p-4 max-h-[80vh] overflow-y-auto transition-all duration-300 z-10 ${
-            searchPanelOpen ? "left-4" : "right-4"
-          }`}
-        >
-          <div className="flex justify-between items-start mb-2">
-            <h2 className="text-lg font-bold">{selectedNode.title}</h2>
-            <button
-              onClick={() => setSelectedNode(null)}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              ✕
-            </button>
-          </div>
-
-          <div className="space-y-3 text-sm">
-            <div>
-              <h3 className="font-semibold text-gray-700">Summary</h3>
-              <p className="text-gray-600">{selectedNode.summary}</p>
-            </div>
-
-            {/* High-Level Tags */}
-            {selectedNode.tags.high_level.length > 0 && (
-              <div>
-                <h3 className="font-semibold text-gray-700">High-Level Tags</h3>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {selectedNode.tags.high_level.map((tag, i) => (
-                    <button
-                      key={i}
-                      onClick={() => {
-                        toggleTag(tag);
-                        setSearchPanelOpen(true);
-                      }}
-                      className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 transition-colors cursor-pointer font-medium"
-                      title="Click to filter by this high-level tag"
-                    >
-                      {tag}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Low-Level Tags */}
-            {selectedNode.tags.low_level.length > 0 && (
-              <div>
-                <h3 className="font-semibold text-gray-700">Low-Level Tags</h3>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {selectedNode.tags.low_level.map((tag, i) => (
-                    <button
-                      key={i}
-                      onClick={() => {
-                        toggleTag(tag);
-                        setSearchPanelOpen(true);
-                      }}
-                      className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs hover:bg-green-200 transition-colors cursor-pointer"
-                      title="Click to filter by this low-level tag"
-                    >
-                      {tag}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <h3 className="font-semibold text-gray-700">Entities</h3>
-              <div className="flex flex-wrap gap-1 mt-1">
-                {selectedNode.entities.map((entity, i) => (
-                  <button
-                    key={i}
-                    onClick={() => {
-                      toggleEntity(entity);
-                      setSearchPanelOpen(true);
-                    }}
-                    className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs hover:bg-green-200 transition-colors cursor-pointer"
-                    title="Click to filter by this entity"
-                  >
-                    {entity}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <h3 className="font-semibold text-gray-700">Author</h3>
-              <p className="text-gray-600">{selectedNode.author}</p>
-            </div>
-
-            <div>
-              <h3 className="font-semibold text-gray-700">Last Modified</h3>
-              <p className="text-gray-600">
-                {new Date(selectedNode.modified).toLocaleDateString()}
-              </p>
-            </div>
-
-            <a
-              href={selectedNode.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full text-center bg-blue-500 text-white py-2 rounded hover:bg-blue-600 transition-colors"
-            >
-              Open Document
-            </a>
-          </div>
         </div>
       )}
-
-      {/* Legend */}
-      <div className="absolute bottom-4 left-4 bg-white/90 rounded-lg shadow-lg p-3 max-w-xs">
-        <h3 className="text-sm font-semibold mb-2">Controls</h3>
-        <ul className="text-xs space-y-1 text-gray-700">
-          <li>• Drag nodes to reposition</li>
-          <li>• Scroll to zoom</li>
-          <li>• Click & drag canvas to pan</li>
-          <li>• Hover over nodes to highlight connections</li>
-          <li>• Click nodes for details</li>
-          <li>• Click search icon (top right) to filter graph</li>
-          <li>• Click tags/entities in detail panel to add filters</li>
-        </ul>
-      </div>
     </div>
   );
 }

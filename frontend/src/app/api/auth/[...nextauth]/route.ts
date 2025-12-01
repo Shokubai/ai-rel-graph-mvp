@@ -33,6 +33,7 @@ export const authOptions: NextAuthOptions = {
             "openid",
             "email",
             "profile",
+            "picture",
             "https://www.googleapis.com/auth/drive.readonly",
             "https://www.googleapis.com/auth/drive.metadata.readonly",
           ].join(" "),
@@ -45,12 +46,12 @@ export const authOptions: NextAuthOptions = {
   ],
   cookies: {
     sessionToken: {
-      name: 'next-auth.session-token',
+      name: "next-auth.session-token",
       options: {
         httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production',
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
       },
     },
   },
@@ -66,27 +67,27 @@ export const authOptions: NextAuthOptions = {
           // Sync user tokens
           if (user) {
             try {
-              const apiUrl = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-              await fetch(
-                `${apiUrl}/api/v1/users/sync`,
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-Internal-Key": process.env.NEXTAUTH_SECRET || "",
-                  },
-                  body: JSON.stringify({
-                    google_id: user.id,
-                    email: user.email,
-                    name: user.name,
-                    google_access_token: account.access_token,
-                    google_refresh_token: account.refresh_token,
-                    google_token_expires_at: account.expires_at
-                      ? new Date(account.expires_at * 1000).toISOString()
-                      : null,
-                  }),
+              const apiUrl =
+                process.env.INTERNAL_API_URL ||
+                process.env.NEXT_PUBLIC_API_URL ||
+                "http://localhost:8000";
+              await fetch(`${apiUrl}/api/v1/users/sync`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Internal-Key": process.env.NEXTAUTH_SECRET || "",
                 },
-              );
+                body: JSON.stringify({
+                  google_id: user.id,
+                  email: user.email,
+                  name: user.name,
+                  google_access_token: account.access_token,
+                  google_refresh_token: account.refresh_token,
+                  google_token_expires_at: account.expires_at
+                    ? new Date(account.expires_at * 1000).toISOString()
+                    : null,
+                }),
+              });
             } catch (error) {
               console.error("Failed to sync user tokens to backend:", error);
             }
@@ -191,27 +192,27 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
     // Sync refreshed token to backend
     if (token.id && token.email) {
       try {
-        const apiUrl = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-        await fetch(
-          `${apiUrl}/api/v1/users/sync`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Internal-Key": process.env.NEXTAUTH_SECRET || "",
-            },
-            body: JSON.stringify({
-              google_id: token.id,
-              email: token.email,
-              name: token.name,
-              google_access_token: newToken.accessToken,
-              google_refresh_token: newToken.refreshToken,
-              google_token_expires_at: new Date(
-                newToken.accessTokenExpires as number,
-              ).toISOString(),
-            }),
+        const apiUrl =
+          process.env.INTERNAL_API_URL ||
+          process.env.NEXT_PUBLIC_API_URL ||
+          "http://localhost:8000";
+        await fetch(`${apiUrl}/api/v1/users/sync`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Key": process.env.NEXTAUTH_SECRET || "",
           },
-        );
+          body: JSON.stringify({
+            google_id: token.id,
+            email: token.email,
+            name: token.name,
+            google_access_token: newToken.accessToken,
+            google_refresh_token: newToken.refreshToken,
+            google_token_expires_at: new Date(
+              newToken.accessTokenExpires as number,
+            ).toISOString(),
+          }),
+        });
       } catch (error) {
         console.error("Failed to sync refreshed tokens to backend:", error);
       }
