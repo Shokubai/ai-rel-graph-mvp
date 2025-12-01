@@ -180,16 +180,24 @@ For each document, provide:
 
 1. **Summary**: A concise 1-2 sentence summary capturing the main point
 
-2. **Tags** (0 to {max_tags} tags - BE SELECTIVE):
-   - Focus on HIGH-LEVEL, OVERARCHING themes (e.g., "software engineering", "quarterly planning", "banking regulations")
-   - Include document type if relevant (e.g., "design document", "meeting notes", "final report")
+2. **Tags** (0 to {max_tags} tags - BE SELECTIVE AND BROAD):
+   - **CRITICAL: START BROAD** - Use general categories that can be subdivided later
+   - Think in CATEGORIES, not specifics (e.g., "resume" not "engineering resume", "engineering" not "mechanical engineering")
+   - Include broad document types (e.g., "resume", "report", "documentation", "presentation")
+   - Include broad domains (e.g., "engineering", "business", "healthcare", "government", "education")
    - Include language if not English (e.g., "Japanese", "Spanish")
-   - Include industry/domain (e.g., "healthcare", "finance", "education")
-   - DO NOT include generic words like "document", "information", "content"
-   - DO NOT force tags if the document doesn't have clear themes
+   - DO NOT combine multiple concepts into one tag - keep them separate and broad
+   - DO NOT create overly specific tags - these will be created later through subdivision
 
-   ✅ GOOD TAGS: "software development", "design document", "Qualcomm internship", "beekeeping simulation"
-   ❌ BAD TAGS: "document", "text", "information", "project", "work"
+   ✅ GOOD BROAD TAGS: "resume", "engineering", "manufacturing", "government", "banking", "internship", "design"
+   ❌ TOO SPECIFIC: "mechanical engineering internship", "government banking", "chemical engineering resume", "manufacturing project management"
+   ❌ TOO GENERIC: "document", "text", "information", "project", "work"
+
+   **Examples:**
+   - Resume for software engineer → ["resume", "engineering", "software"]
+   - Chemical engineering internship report → ["resume", "engineering", "internship"]
+   - Government banking regulation document → ["government", "banking", "regulation"]
+   - Mechanical design document → ["design", "engineering"]
 
 3. **Entities** (0 to {max_entities} entities - BE VERY SELECTIVE):
    - Only extract if mentioned 2+ times OR is the central subject

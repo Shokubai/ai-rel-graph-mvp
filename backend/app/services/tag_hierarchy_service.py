@@ -1,7 +1,7 @@
 """Tag hierarchy service for building multi-level tag structures."""
 import json
 import logging
-from collections import Counter, defaultdict
+from collections import Counter
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openai import OpenAI
@@ -67,7 +67,7 @@ class TagHierarchyService:
         return dict(tag_counts)
 
     def should_split_tag(
-        self, tag: str, count: int, existing_hierarchy: Dict[str, Any]
+        self, tag: str, count: int, existing_hierarchy: Dict[str, Any], already_split_this_round: Set[str]
     ) -> bool:
         """Determine if a tag should be split into sub-tags.
 
@@ -75,6 +75,7 @@ class TagHierarchyService:
             tag: The tag to check
             count: Number of documents with this tag
             existing_hierarchy: Current tag hierarchy (to avoid re-splitting)
+            already_split_this_round: Tags already split in this build_hierarchy call
 
         Returns:
             True if tag should be split
@@ -83,8 +84,9 @@ class TagHierarchyService:
         if count < self.split_threshold:
             return False
 
-        # Don't split if already a parent tag
-        if tag in existing_hierarchy and existing_hierarchy[tag].get("type") == "high_level":
+        # Don't split if we already split this tag in this round
+        # (This prevents infinite loops while allowing multi-level hierarchy)
+        if tag in already_split_this_round:
             return False
 
         logger.info(f"Tag '{tag}' has {count} documents (>= {self.split_threshold}), considering split")
@@ -421,12 +423,13 @@ For each document, select the appropriate sub-tag(s) from: {sub_tags}"""
 
         # Initialize hierarchy metadata
         hierarchy = {}
+        already_split_this_round = set()  # Track tags split in this build to prevent re-splitting
 
         # Step 2: Identify tags to split
         logger.info(f"\n[Step 2/5] Identifying tags to split (threshold: {self.split_threshold})...")
         tags_to_split = []
         for tag, count in tag_counts.items():
-            if self.should_split_tag(tag, count, hierarchy):
+            if self.should_split_tag(tag, count, hierarchy, already_split_this_round):
                 tags_to_split.append((tag, count))
 
         tags_to_split.sort(key=lambda x: x[1], reverse=True)  # Split largest tags first
@@ -460,6 +463,9 @@ For each document, select the appropriate sub-tag(s) from: {sub_tags}"""
                     "reassignments": reassignments,
                 }
 
+                # Mark this tag as split in this round
+                already_split_this_round.add(parent_tag)
+
                 # Update hierarchy metadata
                 hierarchy[parent_tag] = {
                     "type": "high_level",
@@ -469,7 +475,7 @@ For each document, select the appropriate sub-tag(s) from: {sub_tags}"""
 
                 for sub_tag in sub_tags:
                     sub_count = sum(
-                        1 for doc_id, tags in reassignments.items()
+                        1 for _, tags in reassignments.items()
                         if sub_tag in tags
                     )
                     hierarchy[sub_tag] = {
@@ -479,6 +485,81 @@ For each document, select the appropriate sub-tag(s) from: {sub_tags}"""
                     }
             else:
                 logger.info(f"  Keeping '{parent_tag}' as-is (LLM recommends not splitting)")
+
+        # Step 3.5: Recursive splitting for multi-level hierarchy
+        logger.info("\n[Step 3.5/5] Checking for recursive splits (multi-level hierarchy)...")
+
+        # Apply current hierarchy to nodes to get accurate sub-tag counts
+        temp_nodes = self._apply_hierarchy_to_nodes(nodes, tag_reassignments, hierarchy)
+
+        # Analyze distribution of low-level tags (potential children that could split further)
+        low_level_tag_counts = Counter()
+        for node in temp_nodes:
+            tags = node.get("tags", {})
+            if isinstance(tags, dict):
+                low_level_tags = tags.get("low_level", [])
+                low_level_tag_counts.update(low_level_tags)
+
+        # Find low-level tags that should be split
+        sub_tags_to_split = []
+        for tag, count in low_level_tag_counts.items():
+            if self.should_split_tag(tag, count, hierarchy, already_split_this_round):
+                sub_tags_to_split.append((tag, count))
+
+        if sub_tags_to_split:
+            sub_tags_to_split.sort(key=lambda x: x[1], reverse=True)
+            logger.info(f"Found {len(sub_tags_to_split)} sub-tags that can split further: {[t[0] for t in sub_tags_to_split]}")
+
+            # Split these sub-tags (creating 3rd level)
+            for sub_tag, count in sub_tags_to_split:
+                # Get documents with this low-level tag
+                docs_with_tag = []
+                for node in temp_nodes:
+                    tags = node.get("tags", {})
+                    if isinstance(tags, dict):
+                        if sub_tag in tags.get("low_level", []):
+                            docs_with_tag.append(node)
+
+                logger.info(f"\n  Recursively splitting '{sub_tag}' ({len(docs_with_tag)} documents)...")
+
+                # Ask LLM for sub-tag suggestions
+                new_sub_tags = self.suggest_sub_tags(sub_tag, docs_with_tag)
+
+                if new_sub_tags:
+                    logger.info(f"  Creating 3rd-level tags under '{sub_tag}'...")
+                    reassignments = self.reassign_documents_to_subtags(
+                        sub_tag, new_sub_tags, docs_with_tag
+                    )
+
+                    tag_reassignments[sub_tag] = {
+                        "sub_tags": new_sub_tags,
+                        "reassignments": reassignments,
+                    }
+
+                    # Mark as split
+                    already_split_this_round.add(sub_tag)
+
+                    # Update hierarchy - sub_tag becomes high_level
+                    old_parent = hierarchy[sub_tag].get("parent")
+                    hierarchy[sub_tag]["type"] = "high_level"
+                    hierarchy[sub_tag]["children"] = new_sub_tags
+                    hierarchy[sub_tag]["parent"] = old_parent  # Keep reference to grandparent
+
+                    # Create new 3rd-level tags
+                    for new_sub_tag in new_sub_tags:
+                        new_sub_count = sum(
+                            1 for _, tags_list in reassignments.items()
+                            if new_sub_tag in tags_list
+                        )
+                        hierarchy[new_sub_tag] = {
+                            "type": "low_level",
+                            "parent": sub_tag,
+                            "document_count": new_sub_count,
+                        }
+                else:
+                    logger.info(f"  Keeping '{sub_tag}' as-is (LLM recommends not splitting)")
+        else:
+            logger.info("No sub-tags need further splitting")
 
         # Step 4: Find cross-cutting tags
         logger.info("\n[Step 4/5] Finding cross-cutting tag combinations...")
