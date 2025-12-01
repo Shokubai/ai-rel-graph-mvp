@@ -1,24 +1,63 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import { Navbar } from "@/components/Navbar";
 import { GraphView } from "@/components/GraphView";
+import { FileExplorer } from "@/components/FileExplorer";
+import { ProcessingStatus } from "@/components/ProcessingStatus";
 import { GraphNode, GraphEdge } from "@/hooks/useGraph";
+import axios from "axios";
 
-interface UploadedGraphData {
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
   metadata?: Record<string, unknown>;
 }
 
-export default function Home() {
-  const [uploadedGraphData, setUploadedGraphData] = useState<UploadedGraphData | null>(null);
+type AppState = "explorer" | "processing" | "graph" | "empty";
 
-  const handleUpdateFiles = async () => {
-    // TODO: Implement API call to check for new files in Google Drive
-    console.log("Checking for new files...");
-    // This will trigger a backend API call to sync Google Drive files
-    alert("Checking for new files from Google Drive...");
+export default function Home() {
+  const { data: session, status } = useSession();
+  const [appState, setAppState] = useState<AppState>("empty");
+  const [graphData, setGraphData] = useState<GraphData | null>(null);
+  const [processingTaskId, setProcessingTaskId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (status === "authenticated" && session) {
+      // Always show file explorer when user signs in
+      // They can choose to create new graph or upload existing one
+      setAppState("explorer");
+    } else if (status === "unauthenticated") {
+      setAppState("empty");
+    }
+  }, [status, session]);
+
+  const handleUpdateFiles = () => {
+    // Show file explorer to select new files
+    setAppState("explorer");
+  };
+
+  const handleProcessingStart = (taskId: string) => {
+    setProcessingTaskId(taskId);
+    setAppState("processing");
+  };
+
+  const handleProcessingComplete = () => {
+    setAppState("graph");
+    setProcessingTaskId(null);
+  };
+
+  const handleGraphDataUpload = (uploadedData: GraphData) => {
+    setGraphData(uploadedData);
+    setAppState("graph");
+  };
+
+  const handleBackToExplorer = () => {
+    setAppState("explorer");
+    setProcessingTaskId(null);
   };
 
   return (
@@ -26,9 +65,37 @@ export default function Home() {
       {/* Navbar */}
       <Navbar onUpdateClick={handleUpdateFiles} />
 
-      {/* Main content - Graph View */}
+      {/* Main content - different views based on state */}
       <main className="flex-1 overflow-hidden">
-        <GraphView uploadedData={uploadedGraphData} />
+        {appState === "empty" && (
+          <div className="w-full h-full flex items-center justify-center bg-gray-900">
+            <div className="text-center max-w-md px-6">
+              <div className="text-6xl mb-6">🔒</div>
+              <h1 className="text-3xl font-bold text-white mb-4">Sign In to Get Started</h1>
+              <p className="text-gray-400 text-lg">
+                Sign in with your Google account to create a knowledge graph from your Google Drive
+                files
+              </p>
+            </div>
+          </div>
+        )}
+
+        {appState === "explorer" && (
+          <FileExplorer
+            onProcessingStart={handleProcessingStart}
+            onGraphDataUpload={handleGraphDataUpload}
+          />
+        )}
+
+        {appState === "processing" && processingTaskId && (
+          <ProcessingStatus
+            fileProcessingTaskId={processingTaskId}
+            onComplete={handleProcessingComplete}
+            onBack={handleBackToExplorer}
+          />
+        )}
+
+        {appState === "graph" && <GraphView uploadedData={graphData} />}
       </main>
     </div>
   );

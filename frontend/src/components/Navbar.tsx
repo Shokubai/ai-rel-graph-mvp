@@ -35,7 +35,7 @@ export function Navbar({ onUpdateClick }: NavbarProps) {
               className={`px-4 py-2 rounded-lg font-medium transition-all ${
                 isLoggedIn
                   ? "bg-blue-600 text-white hover:bg-blue-700"
-                  : "bg-gray-700 text-gray-500 cursor-not-allowed blur-sm"
+                  : "bg-gray-700 text-gray-500 cursor-not-allowed"
               }`}
               title={isLoggedIn ? "Check for new files" : "Login to update files"}
             >

@@ -25,6 +25,9 @@ class ProcessFilesRequest(BaseModel):
     folder_id: Optional[str] = None
     """Optional folder ID to process. If None, processes entire Drive."""
 
+    file_ids: Optional[list[str]] = None
+    """Optional list of specific file IDs to process. Takes precedence over folder_id."""
+
 
 class ProcessFilesResponse(BaseModel):
     """Response when processing is initiated."""
@@ -97,14 +100,20 @@ async def start_processing(
         kwargs={
             "user_id": user_id,
             "folder_id": request.folder_id,
+            "file_ids": request.file_ids,
         }
     )
 
-    folder_msg = f"folder {request.folder_id}" if request.folder_id else "entire Drive"
+    if request.file_ids:
+        message = f"Started processing {len(request.file_ids)} selected files"
+    elif request.folder_id:
+        message = f"Started processing files from folder {request.folder_id}"
+    else:
+        message = "Started processing files from entire Drive"
 
     return ProcessFilesResponse(
         task_id=task.id,
-        message=f"Started processing files from {folder_msg}",
+        message=message,
         status="started",
     )
 

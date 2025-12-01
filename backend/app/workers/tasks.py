@@ -61,6 +61,7 @@ def process_drive_files_task(
     self: DatabaseTask,
     user_id: str,
     folder_id: Optional[str] = None,
+    file_ids: Optional[list[str]] = None,
     output_dir: str = "processed_files",
 ) -> Dict[str, Any]:
     """
@@ -68,13 +69,14 @@ def process_drive_files_task(
 
     This task:
     1. Fetches the user's Google access token from database
-    2. Lists all processable files in Drive (or specific folder)
+    2. Lists all processable files in Drive (or specific folder/file IDs)
     3. Downloads and extracts text from each file
     4. Saves results to JSON
 
     Args:
         user_id: Google ID of the user
         folder_id: Optional Google Drive folder ID (None = entire Drive)
+        file_ids: Optional list of specific file IDs to process (takes precedence over folder_id)
         output_dir: Directory to save output files
 
     Returns:
@@ -99,9 +101,19 @@ def process_drive_files_task(
         drive_service = DriveService(access_token)
         text_extractor = TextExtractor()
 
-        # Step 3: List all files
-        logger.info("Fetching file list from Google Drive...")
-        all_files = drive_service.list_files_in_folder(folder_id)
+        # Step 3: Get files (either by IDs or by listing folder)
+        if file_ids:
+            logger.info(f"Fetching {len(file_ids)} specific files from Google Drive...")
+            all_files = []
+            for file_id in file_ids:
+                try:
+                    file_metadata = drive_service.get_file_metadata(file_id)
+                    all_files.append(file_metadata)
+                except Exception as e:
+                    logger.warning(f"Failed to get metadata for file {file_id}: {e}")
+        else:
+            logger.info("Fetching file list from Google Drive...")
+            all_files = drive_service.list_files_in_folder(folder_id)
 
         # Step 4: Filter processable files
         processable_files = [
