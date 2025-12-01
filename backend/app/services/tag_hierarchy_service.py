@@ -96,18 +96,30 @@ class TagHierarchyService:
         self,
         parent_tag: str,
         documents: List[Dict[str, Any]],
-        max_sub_tags: int = 4,
     ) -> Optional[List[str]]:
         """Use LLM to suggest sub-categories for a broad tag.
 
         Args:
             parent_tag: The tag to split
             documents: Documents that have this tag
-            max_sub_tags: Maximum number of sub-tags to create
 
         Returns:
             List of sub-tag names, or None if LLM says not to split
         """
+        # Calculate dynamic max_sub_tags based on document count
+        # More documents = more potential for diverse sub-categories
+        doc_count = len(documents)
+        if doc_count <= 15:
+            max_sub_tags = 3  # 10-15 docs: up to 3 sub-tags
+        elif doc_count <= 25:
+            max_sub_tags = 4  # 16-25 docs: up to 4 sub-tags
+        elif doc_count <= 35:
+            max_sub_tags = 5  # 26-35 docs: up to 5 sub-tags
+        else:
+            max_sub_tags = 6  # 36+ docs: up to 6 sub-tags
+
+        logger.info(f"Dynamic max_sub_tags for '{parent_tag}': {max_sub_tags} (based on {doc_count} documents)")
+
         # Sample up to 15 documents for LLM analysis
         sample_docs = documents[:15] if len(documents) > 15 else documents
 
@@ -139,35 +151,51 @@ Your job is to determine:
 - Tags where documents are naturally diverse and don't cluster into themes
 
 **When TO split:**
-- Broad domain tags with distinct subcategories: "software engineering" → ["web development", "embedded systems", "machine learning"]
-- General tags that cover multiple sub-fields: "finance" → ["corporate finance", "personal banking", "investment"]
+- Broad domain tags with distinct subcategories: "engineering" → ["mechanical engineering", "software engineering", "chemical engineering"]
+- General tags that cover multiple sub-fields: "finance" → ["corporate finance", "personal banking", "investment banking"]
 - Industry tags with specializations: "healthcare" → ["clinical research", "hospital administration", "medical devices"]
+- Document type tags that span multiple specializations: "resume" → ["engineering resume", "business resume", "design resume"]
+
+**CRITICAL: PRESERVE PARENT CONTEXT IN SUB-TAGS**
+- Sub-tags SHOULD include the parent tag name to maintain the relationship
+- ✅ CORRECT: "resume" → ["mechanical engineering resume", "software engineering resume", "business resume"]
+- ❌ WRONG: "resume" → ["mechanical engineering", "software engineering", "business"]
+- ✅ CORRECT: "engineering" → ["mechanical engineering", "software engineering"]
+- ❌ WRONG: "engineering" → ["mechanical", "software"]
 
 **Requirements for sub-tags:**
-- Must be mutually exclusive where possible
-- Should be more specific than the parent tag
+- MOSTLY include parent tag name for context (e.g., "{parent_tag}" should appear in each sub-tag)
+- Should be mutually exclusive where possible
 - Use lowercase, multi-word format (e.g., "machine learning" not "Machine Learning")
 - Should cover the main themes in the sample documents
-- Aim for 2-4 sub-tags (not just 2, not more than {max_sub_tags})
+- Create between 2 and {max_sub_tags} sub-tags based on how diverse the documents are
+  - If documents cluster into 2 clear groups → create 2 sub-tags
+  - If documents are highly diverse → create up to {max_sub_tags} sub-tags
+  - Quality over quantity - don't force splits if documents don't naturally separate
 
 Return JSON:
 {{
   "should_split": true/false,
   "reason": "Brief explanation of decision",
-  "sub_tags": ["specific tag 1", "specific tag 2"] // Empty array if should_split=false
+  "sub_tags": ["specific tag 1 including parent", "specific tag 2 including parent"] // Empty array if should_split=false
 }}
 
 Example 1 (SHOULD split):
-Tag: "software engineering", 15 documents
-Documents cover: React apps, embedded C firmware, ML models, DevOps pipelines
-Response: {{"should_split": true, "reason": "Documents span distinct software domains", "sub_tags": ["web development", "embedded systems", "machine learning", "devops"]}}
+Tag: "resume", 35 documents
+Documents cover: Mechanical engineering resumes, software engineering resumes, business resumes, design resumes
+Response: {{"should_split": true, "reason": "Resumes span distinct career fields", "sub_tags": ["mechanical engineering resume", "software engineering resume", "business resume", "design resume"]}}
 
-Example 2 (SHOULD NOT split):
+Example 2 (SHOULD split):
+Tag: "engineering", 20 documents
+Documents cover: Software projects, mechanical designs, chemical processes
+Response: {{"should_split": true, "reason": "Documents span distinct engineering disciplines", "sub_tags": ["software engineering", "mechanical engineering", "chemical engineering"]}}
+
+Example 3 (SHOULD NOT split):
 Tag: "meeting notes", 20 documents
 Documents cover: Various meeting types across different topics
 Response: {{"should_split": false, "reason": "Document type tag - naturally diverse content", "sub_tags": []}}
 
-Example 3 (SHOULD NOT split):
+Example 4 (SHOULD NOT split):
 Tag: "computer vision", 12 documents
 Documents cover: Various CV topics but all related to vision
 Response: {{"should_split": false, "reason": "Already specific technical field - cohesive theme", "sub_tags": []}}
@@ -277,10 +305,17 @@ New sub-tags: {', '.join(f'"{tag}"' for tag in sub_tags)}
 
 For each document, select which sub-tag(s) apply based on the title and summary.
 
+**CRITICAL: TARGET 75-80% ASSIGNMENT RATE**
+- Most documents should receive at least one sub-tag
+- Be inclusive rather than overly selective
+- Only leave a document without sub-tags if it truly doesn't fit ANY of the options
+
 Rules:
 - A document can have 0, 1, or multiple sub-tags (if it spans multiple sub-categories)
-- If none of the sub-tags fit well, return empty array (better to have no tag than wrong tag)
-- Be selective - only assign sub-tags that are clearly relevant
+- Default to assigning a sub-tag if there's reasonable fit (don't require perfect match)
+- If a document is ambiguous or spans multiple categories, assign multiple sub-tags
+- Only return empty array if the document genuinely doesn't fit any sub-tag
+- Aim for approximately 75-80% of documents to receive at least one sub-tag
 
 Return JSON array:
 [
