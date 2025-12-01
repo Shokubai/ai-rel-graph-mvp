@@ -241,6 +241,9 @@ def generate_knowledge_graph_task(
     use_top_k_similarity: bool = True,
     top_k_neighbors: int = 2,
     min_similarity: float = 0.3,
+    enable_hierarchy: bool = True,
+    hierarchy_split_threshold: int = 10,
+    hierarchy_cross_cutting_threshold: int = 5,
 ) -> Dict[str, Any]:
     """
     Generate knowledge graph from extracted documents.
@@ -250,8 +253,9 @@ def generate_knowledge_graph_task(
     2. Generates OpenAI embeddings
     3. Calculates similarity matrix
     4. Extracts LLM-based tags, summaries, and entities
-    5. Builds graph structure (nodes + edges)
-    6. Saves graph_data.json
+    5. Builds tag hierarchy (if enabled)
+    6. Builds graph structure (nodes + edges)
+    7. Saves graph_data.json
 
     Args:
         documents_file: Path to extracted documents JSON
@@ -262,6 +266,9 @@ def generate_knowledge_graph_task(
         use_top_k_similarity: If True, use top-K neighbors approach (default: True)
         top_k_neighbors: Number of top similar documents per document (default: 2)
         min_similarity: Minimum similarity to create edge in top-K mode (default: 0.3)
+        enable_hierarchy: If True, build hierarchical tag structure (default: True)
+        hierarchy_split_threshold: Min documents per tag to consider splitting (default: 10)
+        hierarchy_cross_cutting_threshold: Min docs with tag combo for cross-cutting (default: 5)
 
     Returns:
         Dictionary with graph statistics
@@ -320,6 +327,9 @@ def generate_knowledge_graph_task(
             use_top_k_similarity=use_top_k_similarity,
             top_k_neighbors=top_k_neighbors,
             min_similarity=min_similarity,
+            enable_hierarchy=enable_hierarchy,
+            hierarchy_split_threshold=hierarchy_split_threshold,
+            hierarchy_cross_cutting_threshold=hierarchy_cross_cutting_threshold,
         )
 
         graph_data = graph_builder.build_graph_from_documents(graph_documents)
@@ -340,6 +350,19 @@ def generate_knowledge_graph_task(
         logger.info(f"Saved graph data to {output_path}")
 
         # Step 5: Return summary
+        # Calculate average tags (handle both flat and hierarchical structure)
+        total_tags = 0
+        for node in graph_data["nodes"]:
+            tags = node.get("tags", [])
+            if isinstance(tags, dict):
+                # Hierarchical structure - count low-level tags
+                total_tags += len(tags.get("low_level", []))
+            else:
+                # Flat structure
+                total_tags += len(tags)
+
+        avg_tags = total_tags / len(graph_data["nodes"]) if graph_data["nodes"] else 0
+
         return {
             "status": "completed",
             "message": f"Generated knowledge graph with {len(graph_data['nodes'])} nodes and {len(graph_data['edges'])} edges",
@@ -348,10 +371,8 @@ def generate_knowledge_graph_task(
                 "total_nodes": len(graph_data["nodes"]),
                 "total_edges": len(graph_data["edges"]),
                 "similarity_threshold": similarity_threshold,
-                "avg_tags_per_doc": sum(len(node["tags"]) for node in graph_data["nodes"])
-                / len(graph_data["nodes"])
-                if graph_data["nodes"]
-                else 0,
+                "avg_tags_per_doc": avg_tags,
+                "hierarchy_enabled": enable_hierarchy,
             },
             "metadata": graph_data["metadata"],
         }

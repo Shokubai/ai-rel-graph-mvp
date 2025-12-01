@@ -10,7 +10,10 @@ export interface GraphNode {
   title: string;
   url: string;
   summary: string;
-  tags: string[];
+  tags: {
+    high_level: string[];
+    low_level: string[];
+  };
   entities: string[];
   author: string;
   modified: string;

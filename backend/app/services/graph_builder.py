@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Set
 from app.services.embedding_service import EmbeddingService
 from app.services.llm_tagging_service import LLMTaggingService
 from app.services.similarity_service import SimilarityService
+from app.services.tag_hierarchy_service import TagHierarchyService
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,9 @@ class GraphBuilder:
         use_top_k_similarity: bool = True,
         top_k_neighbors: int = 2,
         min_similarity: float = 0.3,
+        enable_hierarchy: bool = True,
+        hierarchy_split_threshold: int = 10,
+        hierarchy_cross_cutting_threshold: int = 5,
     ):
         """Initialize graph builder.
 
@@ -33,6 +37,9 @@ class GraphBuilder:
             use_top_k_similarity: If True, use top-K neighbors approach instead of fixed threshold
             top_k_neighbors: Number of top similar documents per document (only used if use_top_k_similarity=True)
             min_similarity: Minimum similarity to create edge in top-K mode (default: 0.3)
+            enable_hierarchy: If True, build hierarchical tag structure (default: True)
+            hierarchy_split_threshold: Min documents per tag to consider splitting (default: 10)
+            hierarchy_cross_cutting_threshold: Min docs with tag combo for cross-cutting (default: 5)
         """
         self.embedding_service = EmbeddingService()
         self.similarity_service = SimilarityService(
@@ -45,6 +52,16 @@ class GraphBuilder:
         self.use_top_k_similarity = use_top_k_similarity
         self.top_k_neighbors = top_k_neighbors
         self.min_similarity = min_similarity
+        self.enable_hierarchy = enable_hierarchy
+        self.hierarchy_split_threshold = hierarchy_split_threshold
+        self.hierarchy_cross_cutting_threshold = hierarchy_cross_cutting_threshold
+
+        # Initialize hierarchy service if enabled
+        if self.enable_hierarchy:
+            self.tag_hierarchy_service = TagHierarchyService(
+                split_threshold=hierarchy_split_threshold,
+                cross_cutting_threshold=hierarchy_cross_cutting_threshold,
+            )
 
     def build_graph_from_documents(
         self, documents: List[Dict[str, Any]]
@@ -129,6 +146,12 @@ class GraphBuilder:
                 }
             )
 
+        # Step 4.5: Build tag hierarchy (if enabled)
+        tag_hierarchy = {}
+        if self.enable_hierarchy:
+            logger.info("Step 4.5: Building tag hierarchy...")
+            nodes, tag_hierarchy = self.tag_hierarchy_service.build_hierarchy(nodes)
+
         # Step 5: Build edges
         logger.info("Step 5: Building edges...")
         doc_ids = [doc["id"] for doc in documents]
@@ -165,8 +188,13 @@ class GraphBuilder:
             "similarity_threshold": self.similarity_threshold if not self.use_top_k_similarity else None,
             "min_similarity": self.min_similarity if self.use_top_k_similarity else None,
             "top_k_neighbors": self.top_k_neighbors if self.use_top_k_similarity else None,
+            "hierarchy_enabled": self.enable_hierarchy,
             "generated_at": datetime.utcnow().isoformat(),
         }
+
+        # Add tag hierarchy to metadata if enabled
+        if self.enable_hierarchy and tag_hierarchy:
+            metadata["tag_hierarchy"] = tag_hierarchy
 
         graph_data = {"nodes": nodes, "edges": edges, "metadata": metadata}
 

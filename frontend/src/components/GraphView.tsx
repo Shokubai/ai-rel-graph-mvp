@@ -9,7 +9,10 @@ interface GraphNode extends d3.SimulationNodeDatum {
   title: string;
   url: string;
   summary: string;
-  tags: string[];
+  tags: {
+    high_level: string[];
+    low_level: string[];
+  };
   entities: string[];
   author: string;
   modified: string;
@@ -61,18 +64,27 @@ export function GraphView({ uploadedData }: GraphViewProps) {
   }, [uploadedData, graphDataResponse]);
 
   // Get unique tags and entities from graph data
-  const { allTags, allEntities } = useMemo(() => {
-    if (!graphData) return { allTags: [], allEntities: [] };
+  const { allTags, allHighLevelTags, allLowLevelTags, allEntities } = useMemo(() => {
+    if (!graphData) return { allTags: [], allHighLevelTags: [], allLowLevelTags: [], allEntities: [] };
 
-    const tags = Array.from(
-      new Set(graphData.nodes.flatMap((node) => node.tags))
+    const highLevelTags = Array.from(
+      new Set(graphData.nodes.flatMap((node) => node.tags.high_level))
+    ).sort();
+
+    const lowLevelTags = Array.from(
+      new Set(graphData.nodes.flatMap((node) => node.tags.low_level))
+    ).sort();
+
+    // Combine all tags for unified filtering
+    const allTags = Array.from(
+      new Set([...highLevelTags, ...lowLevelTags])
     ).sort();
 
     const entities = Array.from(
       new Set(graphData.nodes.flatMap((node) => node.entities))
     ).sort();
 
-    return { allTags: tags, allEntities: entities };
+    return { allTags, allHighLevelTags: highLevelTags, allLowLevelTags: lowLevelTags, allEntities: entities };
   }, [graphData]);
 
   // Filter nodes based on search query and selected filters
@@ -95,9 +107,11 @@ export function GraphView({ uploadedData }: GraphViewProps) {
         if (!matchesTitle && !matchesSummary) return false;
       }
 
-      // Tag filter match (node must have at least one selected tag)
+      // Tag filter match (node must have at least one selected tag from either high or low level)
       if (selectedTags.size > 0) {
-        const hasSelectedTag = node.tags.some((tag) => selectedTags.has(tag));
+        const hasSelectedTag =
+          node.tags.high_level.some((tag) => selectedTags.has(tag)) ||
+          node.tags.low_level.some((tag) => selectedTags.has(tag));
         if (!hasSelectedTag) return false;
       }
 
@@ -167,17 +181,17 @@ export function GraphView({ uploadedData }: GraphViewProps) {
     // Main group for zoom/pan
     const g = svg.append("g");
 
-    // Extract unique tags for color scale
-    const allTags = Array.from(
-      new Set(graphData.nodes.flatMap((node) => node.tags))
+    // Extract unique high-level tags for color scale
+    const allHighLevelTags = Array.from(
+      new Set(graphData.nodes.flatMap((node) => node.tags.high_level))
     );
-    const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(allTags);
+    const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(allHighLevelTags);
 
-    // Helper: Get primary color for a node based on its most common tag
+    // Helper: Get primary color for a node based on its most common high-level tag
     const getNodeColor = (node: GraphNode): string => {
-      if (node.tags.length === 0) return "#999";
-      // Use the first tag as primary color
-      return colorScale(node.tags[0]) as string;
+      if (node.tags.high_level.length === 0) return "#999";
+      // Use the first high-level tag as primary color
+      return colorScale(node.tags.high_level[0]) as string;
     };
 
     // Calculate node size based on number of connections and entities
@@ -473,28 +487,66 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                 </button>
               )}
             </div>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {allTags.map((tag) => (
-                <label
-                  key={tag}
-                  className="flex items-center space-x-2 cursor-pointer hover:bg-gray-50 p-2 rounded"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedTags.has(tag)}
-                    onChange={() => toggleTag(tag)}
-                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                  />
-                  <span className="text-sm text-gray-700">{tag}</span>
-                  <span className="text-xs text-gray-400 ml-auto">
-                    ({graphData.nodes.filter((n) => n.tags.includes(tag)).length})
-                  </span>
-                </label>
-              ))}
-              {allTags.length === 0 && (
-                <p className="text-sm text-gray-500 italic">No tags available</p>
-              )}
-            </div>
+
+            {/* High-level tags */}
+            {allHighLevelTags.length > 0 && (
+              <div className="mb-3">
+                <h4 className="text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+                  High-Level Tags
+                </h4>
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {allHighLevelTags.map((tag) => (
+                    <label
+                      key={`high-${tag}`}
+                      className="flex items-center space-x-2 cursor-pointer hover:bg-blue-50 p-2 rounded"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedTags.has(tag)}
+                        onChange={() => toggleTag(tag)}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700 font-medium">{tag}</span>
+                      <span className="text-xs text-gray-400 ml-auto">
+                        ({graphData.nodes.filter((n) => n.tags.high_level.includes(tag)).length})
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Low-level tags */}
+            {allLowLevelTags.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+                  Low-Level Tags
+                </h4>
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {allLowLevelTags.map((tag) => (
+                    <label
+                      key={`low-${tag}`}
+                      className="flex items-center space-x-2 cursor-pointer hover:bg-green-50 p-2 rounded"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedTags.has(tag)}
+                        onChange={() => toggleTag(tag)}
+                        className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                      />
+                      <span className="text-sm text-gray-700">{tag}</span>
+                      <span className="text-xs text-gray-400 ml-auto">
+                        ({graphData.nodes.filter((n) => n.tags.low_level.includes(tag)).length})
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {allTags.length === 0 && (
+              <p className="text-sm text-gray-500 italic">No tags available</p>
+            )}
           </div>
 
           {/* Filter by entities */}
@@ -592,24 +644,49 @@ export function GraphView({ uploadedData }: GraphViewProps) {
               <p className="text-gray-600">{selectedNode.summary}</p>
             </div>
 
-            <div>
-              <h3 className="font-semibold text-gray-700">Tags</h3>
-              <div className="flex flex-wrap gap-1 mt-1">
-                {selectedNode.tags.map((tag, i) => (
-                  <button
-                    key={i}
-                    onClick={() => {
-                      toggleTag(tag);
-                      setSearchPanelOpen(true);
-                    }}
-                    className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 transition-colors cursor-pointer"
-                    title="Click to filter by this tag"
-                  >
-                    {tag}
-                  </button>
-                ))}
+            {/* High-Level Tags */}
+            {selectedNode.tags.high_level.length > 0 && (
+              <div>
+                <h3 className="font-semibold text-gray-700">High-Level Tags</h3>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {selectedNode.tags.high_level.map((tag, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        toggleTag(tag);
+                        setSearchPanelOpen(true);
+                      }}
+                      className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 transition-colors cursor-pointer font-medium"
+                      title="Click to filter by this high-level tag"
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* Low-Level Tags */}
+            {selectedNode.tags.low_level.length > 0 && (
+              <div>
+                <h3 className="font-semibold text-gray-700">Low-Level Tags</h3>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {selectedNode.tags.low_level.map((tag, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        toggleTag(tag);
+                        setSearchPanelOpen(true);
+                      }}
+                      className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs hover:bg-green-200 transition-colors cursor-pointer"
+                      title="Click to filter by this low-level tag"
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div>
               <h3 className="font-semibold text-gray-700">Entities</h3>

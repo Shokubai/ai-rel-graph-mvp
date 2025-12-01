@@ -50,6 +50,22 @@ class GenerateGraphRequest(BaseModel):
         le=1.0,
         description="Minimum similarity to create edge in top-K mode (default: 0.3)",
     )
+    enable_hierarchy: bool = Field(
+        default=True,
+        description="If True, build hierarchical tag structure with high/low level tags (default: True)",
+    )
+    hierarchy_split_threshold: int = Field(
+        default=10,
+        ge=5,
+        le=50,
+        description="Minimum documents per tag to consider splitting into sub-tags (default: 10)",
+    )
+    hierarchy_cross_cutting_threshold: int = Field(
+        default=5,
+        ge=2,
+        le=20,
+        description="Minimum documents with tag combination to create cross-cutting tag (default: 5)",
+    )
 
 
 class GenerateGraphResponse(BaseModel):
@@ -129,6 +145,9 @@ async def generate_graph(
             "use_top_k_similarity": request.use_top_k_similarity,
             "top_k_neighbors": request.top_k_neighbors,
             "min_similarity": request.min_similarity,
+            "enable_hierarchy": request.enable_hierarchy,
+            "hierarchy_split_threshold": request.hierarchy_split_threshold,
+            "hierarchy_cross_cutting_threshold": request.hierarchy_cross_cutting_threshold,
         }
     )
 
@@ -288,13 +307,20 @@ async def search_documents(
 
         # Search in titles and previews
         query_lower = q.lower()
-        results = [
-            node
-            for node in graph_data["nodes"]
-            if query_lower in node["title"].lower()
-            or query_lower in node.get("preview", "").lower()
-            or any(query_lower in tag.lower() for tag in node.get("tags", []))
-        ]
+        results = []
+
+        for node in graph_data["nodes"]:
+            # Handle both old flat tags and new hierarchical tags
+            tags = node.get("tags", [])
+            if isinstance(tags, dict):
+                all_tags = tags.get("high_level", []) + tags.get("low_level", [])
+            else:
+                all_tags = tags
+
+            if (query_lower in node["title"].lower()
+                or query_lower in node.get("preview", "").lower()
+                or any(query_lower in tag.lower() for tag in all_tags)):
+                results.append(node)
 
         logger.info(f"Search '{q}' found {len(results)} results")
 
@@ -302,4 +328,71 @@ async def search_documents(
 
     except Exception as e:
         logger.error(f"Search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tag-hierarchy")
+async def get_tag_hierarchy(
+    graph_file: Optional[str] = "processed_files/graph_data.json",
+):
+    """
+    Get the tag hierarchy structure.
+
+    Returns the tag hierarchy metadata showing high-level tags,
+    their children, and cross-cutting tags.
+    """
+    graph_path = Path(graph_file)
+
+    if not graph_path.exists():
+        raise HTTPException(status_code=404, detail="Graph data not found")
+
+    try:
+        with open(graph_path, "r", encoding="utf-8") as f:
+            graph_data = json.load(f)
+
+        metadata = graph_data.get("metadata", {})
+
+        if not metadata.get("hierarchy_enabled"):
+            return {
+                "hierarchy_enabled": False,
+                "message": "Tag hierarchy is not enabled for this graph",
+            }
+
+        tag_hierarchy = metadata.get("tag_hierarchy", {})
+
+        if not tag_hierarchy:
+            return {
+                "hierarchy_enabled": True,
+                "message": "No tag splits were created (all tags below threshold or LLM declined splitting)",
+                "tag_hierarchy": {},
+            }
+
+        # Separate high-level and low-level tags for easier consumption
+        high_level_tags = {
+            tag: info for tag, info in tag_hierarchy.items()
+            if info.get("type") == "high_level"
+        }
+
+        low_level_tags = {
+            tag: info for tag, info in tag_hierarchy.items()
+            if info.get("type") == "low_level"
+        }
+
+        cross_cutting_tags = {
+            tag: info for tag, info in low_level_tags.items()
+            if info.get("cross_cutting")
+        }
+
+        return {
+            "hierarchy_enabled": True,
+            "high_level_tags": high_level_tags,
+            "low_level_tags": low_level_tags,
+            "cross_cutting_tags": cross_cutting_tags,
+            "total_high_level": len(high_level_tags),
+            "total_low_level": len(low_level_tags),
+            "total_cross_cutting": len(cross_cutting_tags),
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get tag hierarchy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
