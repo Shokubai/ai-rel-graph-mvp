@@ -139,8 +139,6 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       .join("circle")
       .attr("r", (d) => getNodeSize(d))
       .attr("fill", (d) => getNodeColor(d))
-      .attr("stroke", "#fff")
-      .attr("stroke-width", 2)
       .style("cursor", "pointer");
 
     // Add drag behavior
@@ -171,6 +169,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       .join("text")
       .text((d) => d.title)
       .attr("font-size", 10)
+      .attr("fill", "white")
       .attr("dx", (d) => getNodeSize(d) + 5)
       .attr("dy", 4)
       .style("pointer-events", "none")
@@ -182,8 +181,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
         d3.select(this)
           .transition()
           .duration(200)
-          .attr("r", getNodeSize(d) * 1.5)
-          .attr("stroke-width", 3);
+          .attr("r", getNodeSize(d) * 1.5);
 
         // Highlight connected edges
         link
@@ -224,8 +222,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
         d3.select(this)
           .transition()
           .duration(200)
-          .attr("r", getNodeSize(d))
-          .attr("stroke-width", 2);
+          .attr("r", getNodeSize(d));
 
         link
           .transition()
