@@ -45,6 +45,11 @@ export function GraphView({ uploadedData }: GraphViewProps) {
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
 
+  // Search queries for filtering tags and entities
+  const [highLevelTagSearch, setHighLevelTagSearch] = useState("");
+  const [lowLevelTagSearch, setLowLevelTagSearch] = useState("");
+  const [entitySearch, setEntitySearch] = useState("");
+
   // Extract graph data from API response or uploaded data with useMemo
   const graphData = useMemo(() => {
     // Prefer uploaded data if available
@@ -87,6 +92,197 @@ export function GraphView({ uploadedData }: GraphViewProps) {
     return { allTags, allHighLevelTags: highLevelTags, allLowLevelTags: lowLevelTags, allEntities: entities };
   }, [graphData]);
 
+  // Advanced semantic search with synonyms, fuzzy matching, and related terms
+  const semanticSearch = (query: string, items: string[]): string[] => {
+    if (!query.trim()) return items;
+
+    const queryLower = query.toLowerCase();
+    const words = queryLower.split(/\s+/);
+
+    // Domain-specific synonym and related term mappings
+    const synonymMap: Record<string, string[]> = {
+      'computer': ['software', 'hardware', 'tech', 'it', 'digital', 'computing'],
+      'software': ['computer', 'programming', 'code', 'app', 'application', 'tech'],
+      'engineering': ['technical', 'development', 'design', 'architect', 'engineer'],
+      'management': ['manager', 'lead', 'leadership', 'director', 'admin', 'supervisor'],
+      'project': ['program', 'initiative', 'work', 'task'],
+      'manufacturing': ['production', 'factory', 'industrial', 'assembly'],
+      'mechanical': ['machine', 'equipment', 'hardware'],
+      'chemical': ['chemistry', 'lab', 'laboratory'],
+      'process': ['procedure', 'workflow', 'operation'],
+      'data': ['information', 'analytics', 'database'],
+      'business': ['corporate', 'enterprise', 'company'],
+      'science': ['scientific', 'research', 'study'],
+      'university': ['college', 'academic', 'school', 'education'],
+      'intern': ['internship', 'trainee', 'apprentice'],
+      'senior': ['lead', 'principal', 'chief', 'head'],
+    };
+
+    // Levenshtein distance for fuzzy matching
+    const levenshteinDistance = (str1: string, str2: string): number => {
+      const m = str1.length;
+      const n = str2.length;
+      const dp: number[][] = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0));
+
+      for (let i = 0; i <= m; i++) dp[i][0] = i;
+      for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+      for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+          if (str1[i - 1] === str2[j - 1]) {
+            dp[i][j] = dp[i - 1][j - 1];
+          } else {
+            dp[i][j] = Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]) + 1;
+          }
+        }
+      }
+      return dp[m][n];
+    };
+
+    // Get related terms for a word
+    const getRelatedTerms = (word: string): string[] => {
+      const related: string[] = [];
+      for (const [key, synonyms] of Object.entries(synonymMap)) {
+        if (word.includes(key) || key.includes(word)) {
+          related.push(key, ...synonyms);
+        }
+        if (synonyms.some(syn => word.includes(syn) || syn.includes(word))) {
+          related.push(key, ...synonyms);
+        }
+      }
+      return [...new Set(related)];
+    };
+
+    // Score each item based on relevance
+    const scored = items.map((item) => {
+      const itemLower = item.toLowerCase();
+      const itemWords = itemLower.split(/\s+/);
+      let score = 0;
+
+      // 1. Exact match - highest score
+      if (itemLower === queryLower) {
+        score += 100;
+      }
+
+      // 2. Contains full query - very high score
+      if (itemLower.includes(queryLower)) {
+        score += 60;
+      }
+
+      // 3. Query starts with item or item starts with query
+      if (itemLower.startsWith(queryLower) || queryLower.startsWith(itemLower)) {
+        score += 40;
+      }
+
+      // 4. Word-by-word matching
+      words.forEach((queryWord) => {
+        itemWords.forEach((itemWord) => {
+          // Exact word match
+          if (itemWord === queryWord) {
+            score += 20;
+          }
+          // Word contains query word or vice versa
+          else if (itemWord.includes(queryWord) || queryWord.includes(itemWord)) {
+            score += 12;
+          }
+          // Word boundary match
+          else if (new RegExp(`\\b${queryWord}`, 'i').test(itemWord)) {
+            score += 8;
+          }
+
+          // Fuzzy matching for typos (allow 1-2 character differences)
+          const distance = levenshteinDistance(queryWord, itemWord);
+          if (distance === 1) {
+            score += 10; // 1 typo
+          } else if (distance === 2 && queryWord.length > 4) {
+            score += 5; // 2 typos for longer words
+          }
+
+          // Partial word matching (for abbreviations or partial searches)
+          if (queryWord.length >= 3 && itemWord.startsWith(queryWord)) {
+            score += 6;
+          }
+        });
+
+        // 5. Synonym and related term matching
+        const relatedTerms = getRelatedTerms(queryWord);
+        itemWords.forEach((itemWord) => {
+          relatedTerms.forEach((relatedTerm) => {
+            if (itemWord.includes(relatedTerm) || relatedTerm.includes(itemWord)) {
+              score += 4; // Lower score for related terms
+            }
+            // Fuzzy match on related terms
+            const distance = levenshteinDistance(relatedTerm, itemWord);
+            if (distance === 1) {
+              score += 3;
+            }
+          });
+        });
+      });
+
+      return { item, score };
+    });
+
+    // Filter items with score > 0 and sort by relevance
+    return scored
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(({ item }) => item);
+  };
+
+  // Filtered tags and entities based on search
+  const filteredHighLevelTags = useMemo(
+    () => semanticSearch(highLevelTagSearch, allHighLevelTags),
+    [highLevelTagSearch, allHighLevelTags]
+  );
+
+  const filteredLowLevelTags = useMemo(
+    () => semanticSearch(lowLevelTagSearch, allLowLevelTags),
+    [lowLevelTagSearch, allLowLevelTags]
+  );
+
+  const filteredEntities = useMemo(
+    () => semanticSearch(entitySearch, allEntities),
+    [entitySearch, allEntities]
+  );
+
+  // Stricter document search - focuses on direct matches
+  const documentMatchesSearch = (query: string, node: GraphNode): boolean => {
+    if (!query.trim()) return true; // No query = match all
+
+    const queryLower = query.toLowerCase();
+    const words = queryLower.split(/\s+/);
+
+    const titleLower = node.title.toLowerCase();
+    const summaryLower = (node.summary || "").toLowerCase();
+    const allTags = [...node.tags.high_level, ...node.tags.low_level].map(t => t.toLowerCase());
+    const allEntities = node.entities.map(e => e.toLowerCase());
+
+    // Exact phrase match in title, tags, or entities (strongest match)
+    if (titleLower.includes(queryLower)) return true;
+    if (allTags.some(tag => tag.includes(queryLower))) return true;
+    if (allEntities.some(entity => entity.includes(queryLower))) return true;
+
+    // Exact phrase match in summary (weaker but still valid)
+    if (summaryLower.includes(queryLower)) return true;
+
+    // For multi-word queries, ALL words must match somewhere
+    // (at least in title, tags, entities, or summary)
+    const allWordsMatch = words.every((queryWord) => {
+      // Skip very short words (like "a", "of", etc.)
+      if (queryWord.length < 2) return true;
+
+      return (
+        titleLower.includes(queryWord) ||
+        summaryLower.includes(queryWord) ||
+        allTags.some(tag => tag.includes(queryWord)) ||
+        allEntities.some(entity => entity.includes(queryWord))
+      );
+    });
+
+    return allWordsMatch;
+  };
+
   // Filter nodes based on search query and selected filters
   const shouldHighlightNode = useMemo(() => {
     return (node: GraphNode): boolean => {
@@ -99,12 +295,9 @@ export function GraphView({ uploadedData }: GraphViewProps) {
         return true;
       }
 
-      // Search query match (case-insensitive)
+      // Strict document search - no synonyms, direct matches only
       if (searchQuery) {
-        const query = searchQuery.toLowerCase();
-        const matchesTitle = node.title.toLowerCase().includes(query);
-        const matchesSummary = node.summary?.toLowerCase().includes(query);
-        if (!matchesTitle && !matchesSummary) return false;
+        if (!documentMatchesSearch(searchQuery, node)) return false;
       }
 
       // Tag filter match (node must have at least one selected tag from either high or low level)
@@ -156,6 +349,9 @@ export function GraphView({ uploadedData }: GraphViewProps) {
     setSearchQuery("");
     setSelectedTags(new Set());
     setSelectedEntities(new Set());
+    setHighLevelTagSearch("");
+    setLowLevelTagSearch("");
+    setEntitySearch("");
   };
 
   // Initialize D3 force graph
@@ -453,13 +649,13 @@ export function GraphView({ uploadedData }: GraphViewProps) {
           {/* Search by name */}
           <div className="mb-6">
             <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Search by Name
+              Search Documents
             </label>
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Enter document title..."
+              placeholder="Search by title, tags, entities, or summary..."
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
             {searchQuery && (
@@ -491,27 +687,41 @@ export function GraphView({ uploadedData }: GraphViewProps) {
             {/* High-level tags */}
             {allHighLevelTags.length > 0 && (
               <div className="mb-3">
-                <h4 className="text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+                <h4 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
                   High-Level Tags
                 </h4>
+                {/* Search input for high-level tags */}
+                <input
+                  type="text"
+                  value={highLevelTagSearch}
+                  onChange={(e) => setHighLevelTagSearch(e.target.value)}
+                  placeholder="Smart search (e.g., 'eng' finds 'engineering')..."
+                  className="w-full px-3 py-1.5 mb-2 text-sm border border-blue-200 rounded focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                />
                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {allHighLevelTags.map((tag) => (
-                    <label
-                      key={`high-${tag}`}
-                      className="flex items-center space-x-2 cursor-pointer hover:bg-blue-50 p-2 rounded"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedTags.has(tag)}
-                        onChange={() => toggleTag(tag)}
-                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                      />
-                      <span className="text-sm text-gray-700 font-medium">{tag}</span>
-                      <span className="text-xs text-gray-400 ml-auto">
-                        ({graphData.nodes.filter((n) => n.tags.high_level.includes(tag)).length})
-                      </span>
-                    </label>
-                  ))}
+                  {filteredHighLevelTags.length > 0 ? (
+                    filteredHighLevelTags.map((tag) => (
+                      <label
+                        key={`high-${tag}`}
+                        className="flex items-center space-x-2 cursor-pointer hover:bg-blue-50 p-2 rounded"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedTags.has(tag)}
+                          onChange={() => toggleTag(tag)}
+                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-700 font-medium">{tag}</span>
+                        <span className="text-xs text-gray-400 ml-auto">
+                          ({graphData.nodes.filter((n) => n.tags.high_level.includes(tag)).length})
+                        </span>
+                      </label>
+                    ))
+                  ) : (
+                    <p className="text-xs text-gray-500 italic p-2">
+                      No matching tags found
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -519,27 +729,41 @@ export function GraphView({ uploadedData }: GraphViewProps) {
             {/* Low-level tags */}
             {allLowLevelTags.length > 0 && (
               <div>
-                <h4 className="text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+                <h4 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
                   Low-Level Tags
                 </h4>
+                {/* Search input for low-level tags */}
+                <input
+                  type="text"
+                  value={lowLevelTagSearch}
+                  onChange={(e) => setLowLevelTagSearch(e.target.value)}
+                  placeholder="Smart search (finds related & partial matches)..."
+                  className="w-full px-3 py-1.5 mb-2 text-sm border border-green-200 rounded focus:ring-2 focus:ring-green-400 focus:border-transparent"
+                />
                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {allLowLevelTags.map((tag) => (
-                    <label
-                      key={`low-${tag}`}
-                      className="flex items-center space-x-2 cursor-pointer hover:bg-green-50 p-2 rounded"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedTags.has(tag)}
-                        onChange={() => toggleTag(tag)}
-                        className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
-                      />
-                      <span className="text-sm text-gray-700">{tag}</span>
-                      <span className="text-xs text-gray-400 ml-auto">
-                        ({graphData.nodes.filter((n) => n.tags.low_level.includes(tag)).length})
-                      </span>
-                    </label>
-                  ))}
+                  {filteredLowLevelTags.length > 0 ? (
+                    filteredLowLevelTags.map((tag) => (
+                      <label
+                        key={`low-${tag}`}
+                        className="flex items-center space-x-2 cursor-pointer hover:bg-green-50 p-2 rounded"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedTags.has(tag)}
+                          onChange={() => toggleTag(tag)}
+                          className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                        />
+                        <span className="text-sm text-gray-700">{tag}</span>
+                        <span className="text-xs text-gray-400 ml-auto">
+                          ({graphData.nodes.filter((n) => n.tags.low_level.includes(tag)).length})
+                        </span>
+                      </label>
+                    ))
+                  ) : (
+                    <p className="text-xs text-gray-500 italic p-2">
+                      No matching tags found
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -564,26 +788,37 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                 </button>
               )}
             </div>
+            {/* Search input for entities */}
+            <input
+              type="text"
+              value={entitySearch}
+              onChange={(e) => setEntitySearch(e.target.value)}
+              placeholder="Smart search entities (fuzzy & related terms)..."
+              className="w-full px-3 py-2 mb-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-purple-400 focus:border-transparent"
+            />
             <div className="space-y-2 max-h-64 overflow-y-auto">
-              {allEntities.map((entity) => (
-                <label
-                  key={entity}
-                  className="flex items-center space-x-2 cursor-pointer hover:bg-gray-50 p-2 rounded"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedEntities.has(entity)}
-                    onChange={() => toggleEntity(entity)}
-                    className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
-                  />
-                  <span className="text-sm text-gray-700">{entity}</span>
-                  <span className="text-xs text-gray-400 ml-auto">
-                    ({graphData.nodes.filter((n) => n.entities.includes(entity)).length})
-                  </span>
-                </label>
-              ))}
-              {allEntities.length === 0 && (
-                <p className="text-sm text-gray-500 italic">No entities available</p>
+              {filteredEntities.length > 0 ? (
+                filteredEntities.map((entity) => (
+                  <label
+                    key={entity}
+                    className="flex items-center space-x-2 cursor-pointer hover:bg-gray-50 p-2 rounded"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedEntities.has(entity)}
+                      onChange={() => toggleEntity(entity)}
+                      className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                    />
+                    <span className="text-sm text-gray-700">{entity}</span>
+                    <span className="text-xs text-gray-400 ml-auto">
+                      ({graphData.nodes.filter((n) => n.entities.includes(entity)).length})
+                    </span>
+                  </label>
+                ))
+              ) : (
+                <p className="text-xs text-gray-500 italic p-2">
+                  {allEntities.length === 0 ? "No entities available" : "No matching entities found"}
+                </p>
               )}
             </div>
           </div>
