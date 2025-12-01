@@ -193,7 +193,7 @@ def process_drive_files_task(
 
             except Exception as e:
                 logger.error(f"  ✗ Failed to process {file_name}: {str(e)}")
-                failed_files.append({"id": file_id, "name": file_name, "error": str(e)})
+                failed_files.append({"file": file_name, "error": str(e)})
                 continue
 
         # Step 6: Save results to JSON
@@ -213,16 +213,8 @@ def process_drive_files_task(
         return {
             "status": "completed",
             "message": f"Successfully processed {len(processed_documents)} files",
-            "output_file": str(output_file),
-            "stats": {
-                "total_files": total_files,
-                "processed": len(processed_documents),
-                "failed": len(failed_files),
-                "total_words": total_words,
-                "average_words": total_words // len(processed_documents)
-                if processed_documents
-                else 0,
-            },
+            "documents_file": str(output_file),
+            "total_documents": len(processed_documents),
             "failed_files": failed_files,
         }
 
@@ -378,15 +370,9 @@ def generate_knowledge_graph_task(
         return {
             "status": "completed",
             "message": f"Generated knowledge graph with {len(graph_data['nodes'])} nodes and {len(graph_data['edges'])} edges",
-            "output_file": str(output_path),
-            "stats": {
-                "total_nodes": len(graph_data["nodes"]),
-                "total_edges": len(graph_data["edges"]),
-                "similarity_threshold": similarity_threshold,
-                "avg_tags_per_doc": avg_tags,
-                "hierarchy_enabled": enable_hierarchy,
-            },
-            "metadata": graph_data["metadata"],
+            "graph_file": str(output_path),
+            "nodes": len(graph_data["nodes"]),
+            "edges": len(graph_data["edges"]),
         }
 
     except Exception as e:

@@ -26,14 +26,14 @@ export default function Home() {
   const [processingTaskId, setProcessingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (status === "authenticated" && session) {
-      // Always show file explorer when user signs in
-      // They can choose to create new graph or upload existing one
+    if (status === "authenticated" && session && appState === "empty") {
+      // Only transition to explorer on initial authentication
+      // Don't reset state on session updates (e.g., when window refocuses)
       setAppState("explorer");
     } else if (status === "unauthenticated") {
       setAppState("empty");
     }
-  }, [status, session]);
+  }, [status, session, appState]);
 
   const handleUpdateFiles = () => {
     // Show file explorer to select new files

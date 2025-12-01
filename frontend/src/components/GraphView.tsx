@@ -443,8 +443,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       .attr("r", (d) => getNodeSize(d))
       .attr("fill", (d) => getNodeColor(d))
       .attr("opacity", (d) => (shouldHighlightNode(d) ? 1 : 0.2))
-      .attr("stroke", (d) => (shouldHighlightNode(d) ? "#fff" : "none"))
-      .attr("stroke-width", (d) => (shouldHighlightNode(d) ? 2 : 0))
+      .attr("stroke", "none")
       .style("cursor", "pointer");
 
     // Add drag behavior

@@ -6,6 +6,18 @@ import axios, { AxiosError } from "axios";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/**
+ * Get JWT token for backend authentication
+ */
+async function getAuthToken(): Promise<string> {
+  const response = await fetch("/api/auth/token");
+  if (!response.ok) {
+    throw new Error("Failed to get authentication token");
+  }
+  const data = await response.json();
+  return data.token;
+}
+
 type ProcessingStage = "file_processing" | "graph_generation" | "complete";
 
 interface FileProcessingStatus {
@@ -65,6 +77,7 @@ export function ProcessingStatus({
 
     try {
       setStage("graph_generation");
+      const token = await getAuthToken();
       const response = await axios.post(
         `${API_BASE}/api/v1/graph/generate`,
         {
@@ -76,7 +89,7 @@ export function ProcessingStatus({
         },
         {
           headers: {
-            Authorization: `Bearer ${(session as { accessToken?: string })?.accessToken}`,
+            Authorization: `Bearer ${token}`,
           },
         }
       );
@@ -95,11 +108,12 @@ export function ProcessingStatus({
 
     const pollInterval = setInterval(async () => {
       try {
+        const token = await getAuthToken();
         const response = await axios.get(
           `${API_BASE}/api/v1/processing/status/${fileProcessingTaskId}`,
           {
             headers: {
-              Authorization: `Bearer ${(session as { accessToken?: string })?.accessToken}`,
+              Authorization: `Bearer ${token}`,
             },
           }
         );
@@ -130,11 +144,12 @@ export function ProcessingStatus({
 
     const pollInterval = setInterval(async () => {
       try {
+        const token = await getAuthToken();
         const response = await axios.get(
           `${API_BASE}/api/v1/graph/status/${graphTaskId}`,
           {
             headers: {
-              Authorization: `Bearer ${(session as { accessToken?: string })?.accessToken}`,
+              Authorization: `Bearer ${token}`,
             },
           }
         );

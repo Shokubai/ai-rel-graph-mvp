@@ -7,6 +7,18 @@ import { GraphNode, GraphEdge } from "@/hooks/useGraph";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/**
+ * Get JWT token for backend authentication
+ */
+async function getAuthToken(): Promise<string> {
+  const response = await fetch("/api/auth/token");
+  if (!response.ok) {
+    throw new Error("Failed to get authentication token");
+  }
+  const data = await response.json();
+  return data.token;
+}
+
 interface DriveFile {
   id: string;
   name: string;
@@ -47,6 +59,7 @@ export function FileExplorer({ onProcessingStart, onGraphDataUpload }: FileExplo
     setError(null);
 
     try {
+      const token = await getAuthToken();
       const params: Record<string, string> = {};
       if (folderId) {
         params.folderId = folderId;
@@ -55,7 +68,7 @@ export function FileExplorer({ onProcessingStart, onGraphDataUpload }: FileExplo
       const response = await axios.get(`${API_BASE}/api/v1/drive/files`, {
         params,
         headers: {
-          Authorization: `Bearer ${(session as { accessToken?: string })?.accessToken}`,
+          Authorization: `Bearer ${token}`,
         },
       });
 
@@ -116,6 +129,7 @@ export function FileExplorer({ onProcessingStart, onGraphDataUpload }: FileExplo
     setError(null);
 
     try {
+      const token = await getAuthToken();
       const response = await axios.post(
         `${API_BASE}/api/v1/processing/start`,
         {
@@ -123,7 +137,7 @@ export function FileExplorer({ onProcessingStart, onGraphDataUpload }: FileExplo
         },
         {
           headers: {
-            Authorization: `Bearer ${(session as { accessToken?: string })?.accessToken}`,
+            Authorization: `Bearer ${token}`,
           },
         }
       );
