@@ -72,6 +72,10 @@ export default function DocumentManager({ onDocumentToggle, onProcessingStart, o
   const [pendingChanges, setPendingChanges] = useState<Map<string, boolean>>(new Map());
   const [saving, setSaving] = useState(false);
 
+  // Delete all confirmation dialog
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   // Google Drive browsing state
   const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
   const [selectedDriveFiles, setSelectedDriveFiles] = useState<Set<string>>(new Set());
@@ -323,6 +327,40 @@ export default function DocumentManager({ onDocumentToggle, onProcessingStart, o
       }
     });
     setPendingChanges(newChanges);
+  };
+
+  // Delete all user data
+  const handleDeleteAllData = async () => {
+    try {
+      setDeleting(true);
+
+      const response = await fetch("/api/graph/documents/delete-all", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete data");
+      }
+
+      // Close confirmation dialog
+      setShowDeleteConfirm(false);
+
+      // Refresh documents list (should be empty now)
+      await fetchDocuments();
+
+      // Notify parent component to refresh graph
+      if (onDocumentToggle) {
+        onDocumentToggle();
+      }
+    } catch (err) {
+      console.error("Error deleting data:", err);
+      alert("Failed to delete all data");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   // Toggle folder expansion
@@ -624,6 +662,12 @@ export default function DocumentManager({ onDocumentToggle, onProcessingStart, o
           >
             Hide All
           </button>
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="px-3 py-1.5 text-sm bg-red-900/30 text-red-400 border border-red-700/50 rounded hover:bg-red-900/50"
+          >
+            Delete All Data
+          </button>
 
           <div className="flex-1"></div>
 
@@ -810,6 +854,42 @@ export default function DocumentManager({ onDocumentToggle, onProcessingStart, o
               >
                 <Plus className="w-4 h-4" />
                 {driveLoading ? "Processing..." : "Process Selected Files"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All Confirmation Dialog */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="bg-gray-900 border border-red-700 rounded-lg p-6 max-w-md w-full mx-4" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+            <h3 className="text-xl font-bold text-red-400 mb-4">Delete All Data</h3>
+            <p className="text-gray-300 mb-6">
+              Are you sure you want to delete all your documents, tags, entities, and relationships from the database?
+              <span className="text-red-400 font-semibold block mt-2">This action cannot be undone!</span>
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="px-4 py-2 bg-gray-800 text-gray-300 border border-gray-700 rounded hover:bg-gray-700 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAllData}
+                disabled={deleting}
+                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {deleting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete All Data"
+                )}
               </button>
             </div>
           </div>
