@@ -77,7 +77,7 @@ export const authOptions: NextAuthOptions = {
                   "X-Internal-Key": process.env.NEXTAUTH_SECRET || "",
                 },
                 body: JSON.stringify({
-                  google_id: user.id,
+                  google_user_id: user.id,
                   email: user.email,
                   name: user.name,
                   google_access_token: account.access_token,
@@ -202,7 +202,7 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
             "X-Internal-Key": process.env.NEXTAUTH_SECRET || "",
           },
           body: JSON.stringify({
-            google_id: token.id,
+            google_user_id: token.id,
             email: token.email,
             name: token.name,
             google_access_token: newToken.accessToken,

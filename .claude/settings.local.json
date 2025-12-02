@@ -2,7 +2,21 @@
   "permissions": {
     "allow": [
       "Bash(npm run lint:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(docker exec:*)",
+      "Bash(poetry install:*)",
+      "Bash(poetry lock:*)",
+      "Bash(poetry add:*)",
+      "Bash(poetry update:*)",
+      "Bash(poetry run python:*)",
+      "Bash(poetry run alembic revision:*)",
+      "Bash(poetry run alembic:*)",
+      "Bash(timeout 10 poetry run uvicorn:*)",
+      "Bash(curl:*)",
+      "Bash(docker-compose restart:*)",
+      "Bash(docker-compose logs:*)",
+      "Bash(find:*)",
+      "Bash(docker-compose rm:*)"
     ],
     "deny": [],
     "ask": []

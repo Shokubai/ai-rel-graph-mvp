@@ -86,7 +86,7 @@ def process_drive_files_task(
 
     try:
         # Step 1: Get user's access token from database
-        user = self.session.query(User).filter(User.google_id == user_id).first()
+        user = self.session.query(User).filter(User.google_user_id == user_id).first()
 
         if not user:
             raise ValueError(f"User not found: {user_id}")

@@ -5,19 +5,23 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 from app.core.config import settings
-from app.core.database import Base
+from app.db.base import Base
+
 # Import all models so Alembic can detect them
-from app.models.user import User  # noqa
+from app.db.models.user import User  # noqa
+from app.db.models.document import Document  # noqa
+from app.db.models.tag import Tag  # noqa
+from app.db.models.entity import Entity  # noqa
+from app.db.models.document_tag import DocumentTag  # noqa
+from app.db.models.document_entity import DocumentEntity  # noqa
+from app.db.models.document_similarity import DocumentSimilarity  # noqa
+from app.db.models.processing_job import ProcessingJob  # noqa
 
 # this is the Alembic Config object
 config = context.config
 
-# Set the database URL from settings
-config.set_main_option(
-    "sqlalchemy.url",
-    f"postgresql://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}@"
-    f"{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}",
-)
+# Set the database URL from settings (sync version for Alembic)
+config.set_main_option("sqlalchemy.url", settings.SYNC_DATABASE_URL)
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:

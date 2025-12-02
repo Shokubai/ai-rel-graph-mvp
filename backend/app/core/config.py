@@ -37,5 +37,15 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost"]
 
+    @property
+    def DATABASE_URL(self) -> str:
+        """Async PostgreSQL database URL for SQLAlchemy."""
+        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+    @property
+    def SYNC_DATABASE_URL(self) -> str:
+        """Sync PostgreSQL database URL for Alembic migrations."""
+        return f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
 
 settings = Settings()

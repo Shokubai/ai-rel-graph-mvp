@@ -1,4 +1,5 @@
 """User management endpoints."""
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -9,13 +10,14 @@ from app.core.database import get_db
 from app.core.auth import get_current_user_id
 from app.models.user import User
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/users", tags=["users"])
 
 
 class UserTokenUpdate(BaseModel):
     """Request model for updating user tokens."""
 
-    google_id: str
+    google_user_id: str
     email: EmailStr
     name: Optional[str] = None
     google_access_token: str
@@ -60,11 +62,19 @@ def sync_user_tokens(
     This endpoint is called by NextAuth during the authentication flow
     to store Google access tokens server-side.
     """
+    logger.info(f"[SYNC] Received request for google_user_id={user_data.google_user_id}, email={user_data.email}")
+
+    # Log the User model columns to verify we're using the right model
+    logger.info(f"[SYNC] User model columns: {[c.name for c in User.__table__.columns]}")
+
     # Find existing user or create new one
-    user = session.query(User).filter(User.google_id == user_data.google_id).first()
+    logger.info(f"[SYNC] Querying for existing user with google_user_id={user_data.google_user_id}")
+    user = session.query(User).filter(User.google_user_id == user_data.google_user_id).first()
+    logger.info(f"[SYNC] Query result: {'Found existing user' if user else 'User not found, will create'}")
 
     if user:
         # Update existing user
+        logger.info(f"[SYNC] Updating existing user id={user.id}")
         user.email = user_data.email
         user.name = user_data.name
         user.google_access_token = user_data.google_access_token
@@ -74,8 +84,9 @@ def sync_user_tokens(
         user.updated_at = datetime.now(timezone.utc)
     else:
         # Create new user
+        logger.info(f"[SYNC] Creating new user with google_user_id={user_data.google_user_id}")
         user = User(
-            google_id=user_data.google_id,
+            google_user_id=user_data.google_user_id,
             email=user_data.email,
             name=user_data.name,
             google_access_token=user_data.google_access_token,
@@ -85,8 +96,10 @@ def sync_user_tokens(
         )
         session.add(user)
 
+    logger.info(f"[SYNC] Committing to database")
     session.commit()
     session.refresh(user)
+    logger.info(f"[SYNC] Successfully saved user id={user.id}")
 
     return user
 

@@ -1,4 +1,5 @@
 """Authentication dependencies and utilities."""
+import logging
 from typing import Optional
 from datetime import datetime, timezone
 from fastapi import Depends, HTTPException, status
@@ -9,6 +10,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
 
+logger = logging.getLogger(__name__)
 security = HTTPBearer()
 
 
@@ -52,7 +54,10 @@ def get_google_access_token(
     This looks up the user in the database and returns their Google access token.
     Raises 401 if user not found, token not available, or token expired.
     """
-    user = session.query(User).filter(User.google_id == user_id).first()
+    logger.info(f"[AUTH] get_google_access_token called for user_id={user_id}")
+    logger.info(f"[AUTH] User model columns: {[c.name for c in User.__table__.columns]}")
+    user = session.query(User).filter(User.google_user_id == user_id).first()
+    logger.info(f"[AUTH] User query result: {'Found' if user else 'Not found'}")
 
     if not user or not user.google_access_token:
         raise HTTPException(
@@ -76,7 +81,10 @@ def get_current_user(
     """
     Get the full User object for the authenticated user.
     """
-    user = session.query(User).filter(User.google_id == user_id).first()
+    logger.info(f"[AUTH] get_current_user called for user_id={user_id}")
+    logger.info(f"[AUTH] User model columns: {[c.name for c in User.__table__.columns]}")
+    user = session.query(User).filter(User.google_user_id == user_id).first()
+    logger.info(f"[AUTH] User query result: {'Found' if user else 'Not found'}")
 
     if not user:
         raise HTTPException(
