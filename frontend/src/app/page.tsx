@@ -1,28 +1,20 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Navbar } from "@/components/Navbar";
 import { GraphView } from "@/components/GraphView";
-import { FileExplorer } from "@/components/FileExplorer";
 import { ProcessingStatus } from "@/components/ProcessingStatus";
-import { GraphNode, GraphEdge, useGraphData } from "@/hooks/useGraph";
-import axios from "axios";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-interface GraphData {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  metadata?: Record<string, unknown>;
-}
+import DocumentManager from "@/components/DocumentManager";
+import { useGraphData } from "@/hooks/useGraph";
 
 type AppState = "explorer" | "processing" | "graph" | "empty" | "loading";
 
 export default function Home() {
   const { data: session, status } = useSession();
+  const queryClient = useQueryClient();
   const [appState, setAppState] = useState<AppState>("empty");
-  const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [processingTaskId, setProcessingTaskId] = useState<string | null>(null);
   const { data: existingGraphData, isLoading: isLoadingGraph } = useGraphData();
 
@@ -59,18 +51,24 @@ export default function Home() {
   };
 
   const handleProcessingComplete = () => {
+    // Invalidate graph data to force refresh with new documents
+    queryClient.invalidateQueries({ queryKey: ["graph-data"] });
     setAppState("graph");
     setProcessingTaskId(null);
-  };
-
-  const handleGraphDataUpload = (uploadedData: GraphData) => {
-    setGraphData(uploadedData);
-    setAppState("graph");
   };
 
   const handleBackToExplorer = () => {
     setAppState("explorer");
     setProcessingTaskId(null);
+  };
+
+  const handleDocumentToggle = () => {
+    // Invalidate graph data to trigger refresh
+    queryClient.invalidateQueries({ queryKey: ["graph-data"] });
+  };
+
+  const handleCloseDocumentManager = () => {
+    setAppState("graph");
   };
 
   return (
@@ -94,9 +92,10 @@ export default function Home() {
         )}
 
         {appState === "explorer" && (
-          <FileExplorer
+          <DocumentManager
+            onDocumentToggle={handleDocumentToggle}
             onProcessingStart={handleProcessingStart}
-            onGraphDataUpload={handleGraphDataUpload}
+            onClose={handleCloseDocumentManager}
           />
         )}
 
@@ -108,7 +107,7 @@ export default function Home() {
           />
         )}
 
-        {appState === "graph" && <GraphView uploadedData={graphData} />}
+        {appState === "graph" && <GraphView uploadedData={null} />}
       </main>
     </div>
   );

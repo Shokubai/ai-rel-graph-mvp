@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import * as d3 from "d3";
 import { useGraphData, GraphNode as GraphNodeType, GraphEdge as GraphEdgeType } from "@/hooks/useGraph";
 
@@ -36,6 +36,8 @@ interface GraphViewProps {
 
 export function GraphView({ uploadedData }: GraphViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const svgSelectionRef = useRef<d3.Selection<SVGSVGElement, unknown, null, undefined> | null>(null);
   const { data: graphDataResponse, isLoading, error } = useGraphData();
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
@@ -44,6 +46,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
+  const [autoCameraFocus, setAutoCameraFocus] = useState(true);
 
   // Search queries for filtering tags and entities
   const [highLevelTagSearch, setHighLevelTagSearch] = useState("");
@@ -357,6 +360,92 @@ export function GraphView({ uploadedData }: GraphViewProps) {
     setEntitySearch("");
   };
 
+  // Function to focus camera on a specific node
+  const focusOnNode = useCallback((node: GraphNode, scale = 2) => {
+    if (!svgRef.current || !svgSelectionRef.current || !zoomBehaviorRef.current) return;
+
+    const svg = svgRef.current;
+    const width = svg.clientWidth;
+    const height = svg.clientHeight;
+
+    // Calculate the transform to center and zoom on the node
+    const transform = d3.zoomIdentity
+      .translate(width / 2, height / 2)
+      .scale(scale)
+      .translate(-(node.x || 0), -(node.y || 0));
+
+    // Animate the transition
+    svgSelectionRef.current
+      .transition()
+      .duration(1100)
+      .call(zoomBehaviorRef.current.transform, transform);
+  }, []);
+
+  // Auto-focus on most relevant search result
+  useEffect(() => {
+    if (!graphData || !searchQuery || !autoCameraFocus) return;
+
+    // Find matching nodes and score them
+    const matchingNodes = graphData.nodes
+      .map((node: GraphNode) => {
+        if (!documentMatchesSearch(searchQuery, node)) return null;
+
+        const queryLower = searchQuery.toLowerCase();
+        const titleLower = node.title.toLowerCase();
+        let score = 0;
+
+        // Score based on match quality
+        if (titleLower === queryLower) score += 100;
+        else if (titleLower.includes(queryLower)) score += 50;
+        else if (titleLower.startsWith(queryLower)) score += 30;
+
+        // Bonus for tag matches
+        const allTags = [...node.tags.high_level, ...node.tags.low_level];
+        if (allTags.some((tag: string) => tag.toLowerCase() === queryLower)) score += 40;
+        else if (allTags.some((tag: string) => tag.toLowerCase().includes(queryLower))) score += 20;
+
+        // Bonus for entity matches
+        if (node.entities.some((entity: string) => entity.toLowerCase() === queryLower)) score += 40;
+        else if (node.entities.some((entity: string) => entity.toLowerCase().includes(queryLower))) score += 20;
+
+        return { node, score };
+      })
+      .filter((result): result is { node: GraphNode; score: number } => result !== null)
+      .sort((a: { node: GraphNode; score: number }, b: { node: GraphNode; score: number }) => b.score - a.score);
+
+    // Focus on the best match
+    if (matchingNodes.length > 0) {
+      const bestMatch = matchingNodes[0].node;
+
+      // Wait for node to have position, with retries
+      let attempts = 0;
+      const maxAttempts = 20;
+      const checkInterval = 100;
+
+      const tryFocus = () => {
+        attempts++;
+
+        // Check if node has a position
+        if (bestMatch.x !== undefined && bestMatch.y !== undefined) {
+          console.log('Focusing on node:', bestMatch.title, 'at position:', bestMatch.x, bestMatch.y);
+          focusOnNode(bestMatch, 1.5);
+        } else if (attempts < maxAttempts) {
+          // Try again after a short delay
+          setTimeout(tryFocus, checkInterval);
+        } else {
+          console.warn('Could not focus on node - position not available after', maxAttempts * checkInterval, 'ms');
+        }
+      };
+
+      // Start checking after a small initial delay
+      setTimeout(tryFocus, 300);
+    }
+  }, [searchQuery, graphData, focusOnNode, autoCameraFocus]);
+
+  // Store node and label selections for updating without recreating simulation
+  const nodeSelectionRef = useRef<d3.Selection<d3.BaseType | SVGCircleElement, GraphNode, SVGGElement, unknown> | null>(null);
+  const labelSelectionRef = useRef<d3.Selection<d3.BaseType | SVGTextElement, GraphNode, SVGGElement, unknown> | null>(null);
+
   // Initialize D3 force graph
   useEffect(() => {
     if (!graphData || !svgRef.current) return;
@@ -376,6 +465,10 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       });
 
     svg.call(zoom);
+
+    // Store refs for camera focus function
+    svgSelectionRef.current = svg;
+    zoomBehaviorRef.current = zoom;
 
     // Main group for zoom/pan
     const g = svg.append("g");
@@ -407,7 +500,14 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       return 5 + Math.sqrt(connectionCount * 2 + entityCount);
     };
 
-    // Create force simulation
+    // Define circular bounded area with triple the space
+    const centerX = width / 2;
+    const centerY = height / 2;
+    // Use 135% of the smaller dimension as radius (tripled from original ~45%)
+    const maxRadius = Math.min(width, height) * 1.35;
+    const featherZone = maxRadius * 0.1; // 10% feathering zone for soft boundary
+
+    // Create force simulation with circular boundary
     const simulation = d3
       .forceSimulation<GraphNode>(graphData.nodes)
       .force(
@@ -416,13 +516,54 @@ export function GraphView({ uploadedData }: GraphViewProps) {
           .forceLink<GraphNode, GraphEdge>(graphData.edges)
           .id((d) => d.id)
           .distance((d) => {
-            // Closer nodes for higher similarity - reduced distance for denser graph
-            return 50 / (d.similarity || 0.5);
+            // Closer nodes for higher similarity - increased distance for looser graph
+            return 120 / (d.similarity || 0.5);
           })
       )
-      .force("charge", d3.forceManyBody().strength(-150)) // Reduced repulsion for denser packing
-      .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collision", d3.forceCollide().radius((d) => getNodeSize(d as GraphNode) + 2)); // Less padding between nodes
+      .force("charge", d3.forceManyBody().strength(-300)) // Stronger repulsion for more spread
+      .force("center", d3.forceCenter(centerX, centerY))
+      .force("collision", d3.forceCollide().radius((d) => getNodeSize(d as GraphNode) + 4))
+      .force("bounds", () => {
+        // Custom circular force with feathering - keeps nodes in a circle
+        graphData.nodes.forEach((node: GraphNode) => {
+          // Access x and y properties from SimulationNodeDatum
+          const nodeX = (node as d3.SimulationNodeDatum).x;
+          const nodeY = (node as d3.SimulationNodeDatum).y;
+
+          // Type guard to ensure x and y exist and are numbers
+          if (typeof nodeX !== 'number' || typeof nodeY !== 'number') return;
+
+          const dx = nodeX - centerX;
+          const dy = nodeY - centerY;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance > maxRadius - featherZone) {
+            // Apply stronger force as node approaches boundary (feathering effect)
+            const overshoot = distance - (maxRadius - featherZone);
+            const strength = Math.min(overshoot / featherZone, 1); // 0 to 1
+            const force = strength * 0.1; // Gentle push back
+
+            const angle = Math.atan2(dy, dx);
+            (node as d3.SimulationNodeDatum).x = nodeX - Math.cos(angle) * force * distance;
+            (node as d3.SimulationNodeDatum).y = nodeY - Math.sin(angle) * force * distance;
+
+            // Hard limit at maxRadius - recheck position
+            const updatedX = (node as d3.SimulationNodeDatum).x;
+            const updatedY = (node as d3.SimulationNodeDatum).y;
+            if (typeof updatedX === 'number' && typeof updatedY === 'number') {
+              const newDx = updatedX - centerX;
+              const newDy = updatedY - centerY;
+              const newDistance = Math.sqrt(newDx * newDx + newDy * newDy);
+
+              if (newDistance > maxRadius) {
+                const ratio = maxRadius / newDistance;
+                (node as d3.SimulationNodeDatum).x = centerX + newDx * ratio;
+                (node as d3.SimulationNodeDatum).y = centerY + newDy * ratio;
+              }
+            }
+          }
+        });
+      });
 
     // Create edges
     const link = g
@@ -442,9 +583,12 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       .join("circle")
       .attr("r", (d) => getNodeSize(d))
       .attr("fill", (d) => getNodeColor(d))
-      .attr("opacity", (d) => (shouldHighlightNode(d) ? 1 : 0.2))
+      .attr("opacity", 1) // Always start at full opacity
       .attr("stroke", "none")
       .style("cursor", "pointer");
+
+    // Store node selection for later updates
+    nodeSelectionRef.current = node;
 
     // Add drag behavior
     const dragBehavior = d3
@@ -475,11 +619,14 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       .text((d) => d.title)
       .attr("font-size", 10)
       .attr("fill", "white")
-      .attr("opacity", (d) => (shouldHighlightNode(d) ? 1 : 0.2))
+      .attr("opacity", 1) // Always start at full opacity
       .attr("dx", (d) => getNodeSize(d) + 5)
       .attr("dy", 4)
       .style("pointer-events", "none")
       .style("user-select", "none");
+
+    // Store label selection for later updates
+    labelSelectionRef.current = labels;
 
     // Hover effects
     node
@@ -567,7 +714,24 @@ export function GraphView({ uploadedData }: GraphViewProps) {
     return () => {
       simulation.stop();
     };
-  }, [graphData, shouldHighlightNode]);
+  }, [graphData]); // Only recreate when data changes, not when filters change
+
+  // Separate effect to update node/label opacity without recreating simulation
+  useEffect(() => {
+    if (!nodeSelectionRef.current || !labelSelectionRef.current) return;
+
+    // Update node opacity based on filters
+    nodeSelectionRef.current
+      .transition()
+      .duration(300)
+      .attr("opacity", (d: GraphNode) => (shouldHighlightNode(d) ? 1 : 0.2));
+
+    // Update label opacity based on filters
+    labelSelectionRef.current
+      .transition()
+      .duration(300)
+      .attr("opacity", (d: GraphNode) => (shouldHighlightNode(d) ? 1 : 0.2));
+  }, [shouldHighlightNode]);
 
   // Show loading state (only if no uploaded data)
   if (!uploadedData && isLoading) {
@@ -810,6 +974,16 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                 Clear search
               </button>
             )}
+            {/* Auto camera focus checkbox */}
+            <label className="flex items-center space-x-2 mt-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoCameraFocus}
+                onChange={(e: { target: { checked: boolean } }) => setAutoCameraFocus(e.target.checked)}
+                className="w-4 h-4 text-blue-600 border-gray-600 rounded focus:ring-blue-500 bg-gray-700"
+              />
+              <span className="text-sm text-gray-300">Auto-focus camera on search</span>
+            </label>
           </div>
 
           {/* Filter by tags */}
