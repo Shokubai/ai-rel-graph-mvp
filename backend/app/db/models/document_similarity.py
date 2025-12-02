@@ -1,5 +1,5 @@
 """Document similarity edges."""
-from sqlalchemy import CheckConstraint, Column, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import Column, Float, ForeignKey, Index, Integer, String, UniqueConstraint
 
 from app.db.base import Base
 
@@ -15,8 +15,9 @@ class DocumentSimilarity(Base):
     similarity_score = Column(Float, nullable=False)
 
     __table_args__ = (
-        # Prevent duplicate edges (store only source < target)
-        CheckConstraint("source_document_id < target_document_id", name="check_source_lt_target"),
+        # Prevent duplicate edges with UNIQUE constraint (replaces CHECK constraint)
+        # Removed CHECK constraint due to collation differences between Python and PostgreSQL
+        UniqueConstraint("source_document_id", "target_document_id", name="uq_document_similarities_pair"),
         Index("idx_similarities_source", "source_document_id"),
         Index("idx_similarities_target", "target_document_id"),
     )

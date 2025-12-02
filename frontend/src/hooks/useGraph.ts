@@ -5,6 +5,18 @@ import axios from "axios";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/**
+ * Get JWT token for backend authentication
+ */
+async function getAuthToken(): Promise<string> {
+  const response = await fetch("/api/auth/token");
+  if (!response.ok) {
+    throw new Error("Failed to get authentication token");
+  }
+  const data = await response.json();
+  return data.token;
+}
+
 export interface GraphNode {
   id: string;
   title: string;
@@ -70,7 +82,12 @@ export function useGraphData() {
   return useQuery<GraphData>({
     queryKey: ["graph-data"],
     queryFn: async () => {
-      const { data } = await axios.get(`${API_BASE}/api/v1/graph/data`);
+      const token = await getAuthToken();
+      const { data } = await axios.get(`${API_BASE}/api/v1/graph/data`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
       return data;
     },
     retry: false,
@@ -86,9 +103,16 @@ export function useGenerateGraph() {
 
   return useMutation({
     mutationFn: async (request: GenerateGraphRequest) => {
+      const token = await getAuthToken();
       const { data } = await axios.post(
         `${API_BASE}/api/v1/graph/generate`,
-        request
+        request,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
       );
       return data;
     },
@@ -107,8 +131,14 @@ export function useGraphGenerationStatus(taskId?: string) {
     queryKey: ["graph-generation-status", taskId],
     queryFn: async () => {
       if (!taskId) throw new Error("No task ID provided");
+      const token = await getAuthToken();
       const { data } = await axios.get(
-        `${API_BASE}/api/v1/graph/status/${taskId}`
+        `${API_BASE}/api/v1/graph/status/${taskId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
       );
       return data;
     },
@@ -132,8 +162,12 @@ export function useSearchGraph(query: string) {
   return useQuery({
     queryKey: ["graph-search", query],
     queryFn: async () => {
+      const token = await getAuthToken();
       const { data } = await axios.get(`${API_BASE}/api/v1/graph/search`, {
         params: { q: query },
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
       return data;
     },
@@ -149,8 +183,14 @@ export function useDocumentDetails(docId?: string) {
     queryKey: ["document-details", docId],
     queryFn: async () => {
       if (!docId) throw new Error("No document ID provided");
+      const token = await getAuthToken();
       const { data } = await axios.get(
-        `${API_BASE}/api/v1/graph/documents/${docId}`
+        `${API_BASE}/api/v1/graph/documents/${docId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
       );
       return data;
     },

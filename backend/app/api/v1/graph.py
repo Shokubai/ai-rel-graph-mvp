@@ -1,14 +1,22 @@
-"""Graph API endpoints for knowledge graph visualization."""
-import json
+"""Graph API endpoints for knowledge graph visualization - PostgreSQL version."""
 import logging
-from pathlib import Path
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user_id
+from app.db.session import get_async_session
+from app.repositories import (
+    DocumentRepository,
+    TagRepository,
+    EntityRepository,
+    SimilarityRepository,
+)
 from app.workers.tasks import generate_knowledge_graph_task
 
 logger = logging.getLogger(__name__)
@@ -16,64 +24,33 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/graph")
 
 
-class GenerateGraphRequest(BaseModel):
-    """Request to generate knowledge graph."""
+async def get_user_uuid(google_user_id: str, session: AsyncSession) -> UUID:
+    """
+    Convert Google user ID to User UUID by looking up in database.
 
-    documents_file: str = Field(
-        ..., description="Path to extracted documents JSON file"
-    )
-    similarity_threshold: float = Field(
-        default=0.75,
-        ge=0.0,
-        le=1.0,
-        description="Minimum similarity score to create edge (only used if use_top_k_similarity=False)",
-    )
-    max_tags_per_doc: int = Field(
-        default=5, ge=1, le=20, description="Maximum tags per document"
-    )
-    max_entities_per_doc: int = Field(
-        default=10, ge=1, le=30, description="Maximum entities per document"
-    )
-    use_top_k_similarity: bool = Field(
-        default=True,
-        description="If True, use top-K neighbors approach instead of fixed threshold (recommended for denser graphs)",
-    )
-    top_k_neighbors: int = Field(
-        default=2,
-        ge=1,
-        le=10,
-        description="Number of top similar documents per document (only used if use_top_k_similarity=True)",
-    )
-    min_similarity: float = Field(
-        default=0.3,
-        ge=0.0,
-        le=1.0,
-        description="Minimum similarity to create edge in top-K mode (default: 0.3)",
-    )
-    enable_hierarchy: bool = Field(
-        default=True,
-        description="If True, build hierarchical tag structure with high/low level tags (default: True)",
-    )
-    hierarchy_split_threshold: int = Field(
-        default=10,
-        ge=5,
-        le=50,
-        description="Minimum documents per tag to consider splitting into sub-tags (default: 10)",
-    )
-    hierarchy_cross_cutting_threshold: int = Field(
-        default=5,
-        ge=2,
-        le=20,
-        description="Minimum documents with tag combination to create cross-cutting tag (default: 5)",
-    )
+    Args:
+        google_user_id: Google user ID from JWT token
+        session: Database session
 
+    Returns:
+        User UUID
 
-class GenerateGraphResponse(BaseModel):
-    """Response when graph generation starts."""
+    Raises:
+        HTTPException: If user not found
+    """
+    from sqlalchemy import select
+    from app.db.models.user import User
 
-    task_id: str
-    message: str
-    status: str
+    user_result = await session.execute(
+        select(User).filter(User.google_user_id == google_user_id)
+    )
+    user = user_result.scalar_one_or_none()
+
+    if not user:
+        logger.error(f"User not found with google_user_id: {google_user_id}")
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return user.id
 
 
 class GraphDataResponse(BaseModel):
@@ -84,20 +61,6 @@ class GraphDataResponse(BaseModel):
     metadata: Dict[str, Any]
 
 
-class GraphNode(BaseModel):
-    """Single graph node (document)."""
-
-    id: str
-    title: str
-    url: str
-    summary: str
-    tags: List[str]
-    entities: List[str]
-    author: str
-    modified: str
-    preview: str
-
-
 class DocumentDetailsResponse(BaseModel):
     """Detailed document information."""
 
@@ -105,11 +68,51 @@ class DocumentDetailsResponse(BaseModel):
     title: str
     url: str
     summary: str
-    tags: List[str]
+    tags: Dict[str, List[str]]  # {"high_level": [...], "low_level": [...]}
     entities: List[str]
     author: str
     modified: str
     preview: str
+
+
+class SearchResponse(BaseModel):
+    """Search results."""
+
+    query: str
+    results: List[Dict[str, Any]]
+    total: int
+
+
+class TagHierarchyResponse(BaseModel):
+    """Tag hierarchy structure."""
+
+    hierarchy_enabled: bool
+    high_level_tags: Dict[str, Any]
+    total_high_level: int
+    total_low_level: int
+
+
+class GenerateGraphRequest(BaseModel):
+    """Request to generate knowledge graph from processed documents."""
+
+    documents_file: str = Field(..., description="Path to extracted documents JSON file")
+    similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    max_tags_per_doc: int = Field(default=5, ge=1, le=20)
+    max_entities_per_doc: int = Field(default=10, ge=1, le=30)
+    use_top_k_similarity: bool = Field(default=True)
+    top_k_neighbors: int = Field(default=2, ge=1, le=10)
+    min_similarity: float = Field(default=0.3, ge=0.0, le=1.0)
+    enable_hierarchy: bool = Field(default=True)
+    hierarchy_split_threshold: int = Field(default=10, ge=5, le=50)
+    hierarchy_cross_cutting_threshold: int = Field(default=5, ge=2, le=20)
+
+
+class GenerateGraphResponse(BaseModel):
+    """Response when graph generation starts."""
+
+    task_id: str
+    message: str
+    status: str
 
 
 @router.post("/generate", response_model=GenerateGraphResponse)
@@ -120,24 +123,21 @@ async def generate_graph(
     """
     Start knowledge graph generation from extracted documents.
 
-    This creates a Celery task that:
-    1. Loads extracted documents from JSON
-    2. Generates OpenAI embeddings
-    3. Calculates similarity matrix
-    4. Extracts LLM-based tags, summaries, and entities
-    5. Builds graph structure
-    6. Saves graph_data.json
+    This creates a Celery task that will:
+    1. Load extracted documents from JSON
+    2. Generate OpenAI embeddings
+    3. Extract LLM-based tags, summaries, and entities
+    4. Calculate similarity matrix
+    5. Save everything to PostgreSQL database
+
+    The frontend polls /graph/status/{task_id} to check progress.
     """
     logger.info(f"User {user_id} requested graph generation from {request.documents_file}")
-
-    # Verify file exists
-    docs_path = Path(request.documents_file)
-    if not docs_path.exists():
-        raise HTTPException(status_code=404, detail=f"Documents file not found: {request.documents_file}")
 
     # Start async task
     task = generate_knowledge_graph_task.apply_async(
         kwargs={
+            "user_id": user_id,
             "documents_file": request.documents_file,
             "similarity_threshold": request.similarity_threshold,
             "max_tags_per_doc": request.max_tags_per_doc,
@@ -214,185 +214,364 @@ async def get_graph_generation_status(task_id: str):
 
 @router.get("/data", response_model=GraphDataResponse)
 async def get_graph_data(
-    graph_file: Optional[str] = "processed_files/graph_data.json",
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_async_session),
+    min_similarity: float = Query(default=0.7, ge=0.0, le=1.0),
+    enabled_only: bool = Query(default=True),
 ):
     """
-    Get the current graph data for visualization.
+    Get the current graph data for visualization from PostgreSQL.
 
-    Returns complete graph structure with nodes and edges.
+    Returns complete graph structure with nodes (documents) and edges (similarities).
     """
-    graph_path = Path(graph_file)
-
-    if not graph_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Graph data not found. Please generate graph first.",
-        )
-
     try:
-        with open(graph_path, "r", encoding="utf-8") as f:
-            graph_data = json.load(f)
+        # Convert Google user ID to UUID
+        user_uuid = await get_user_uuid(user_id, session)
 
-        logger.info(f"Serving graph with {len(graph_data['nodes'])} nodes and {len(graph_data['edges'])} edges")
+        # Initialize repositories
+        doc_repo = DocumentRepository(session)
+        similarity_repo = SimilarityRepository(session)
 
-        return GraphDataResponse(
-            nodes=graph_data["nodes"],
-            edges=graph_data["edges"],
-            metadata=graph_data.get("metadata", {}),
+        # Get all documents for user
+        documents = await doc_repo.list_by_user(
+            user_uuid, enabled_only=enabled_only, load_relations=True
         )
+
+        logger.info(
+            f"Retrieved {len(documents)} documents for user {user_id} (enabled_only={enabled_only})"
+        )
+
+        # Build nodes
+        nodes = []
+        for doc in documents:
+            # Build hierarchical tag structure
+            high_level_tags = []
+            low_level_tags = []
+
+            for doc_tag in doc.tags:
+                tag = doc_tag.tag
+                if doc_tag.tag_level == "high":
+                    high_level_tags.append(tag.name)
+                elif doc_tag.tag_level == "low":
+                    low_level_tags.append(tag.name)
+
+            # Extract entity names
+            entity_names = [doc_entity.entity.name for doc_entity in doc.entities]
+
+            nodes.append(
+                {
+                    "id": doc.id,
+                    "title": doc.title,
+                    "url": doc.url or "",
+                    "summary": doc.summary or "",
+                    "tags": {
+                        "high_level": sorted(high_level_tags),
+                        "low_level": sorted(low_level_tags),
+                    },
+                    "entities": entity_names,
+                    "author": doc.author or "Unknown",
+                    "modified": (
+                        doc.modified_at.isoformat() if doc.modified_at else ""
+                    ),
+                    "preview": doc.summary or (doc.text_content or "")[:200] + "...",
+                }
+            )
+
+        # Get all similarity edges for user
+        similarities = await similarity_repo.get_all_for_user(
+            user_uuid, min_score=min_similarity
+        )
+
+        logger.info(
+            f"Retrieved {len(similarities)} similarity edges (min_similarity={min_similarity})"
+        )
+
+        # Build edges
+        edges = []
+        for sim in similarities:
+            edges.append(
+                {
+                    "source": sim.source_document_id,
+                    "target": sim.target_document_id,
+                    "similarity": sim.similarity_score,
+                    "type": "similar",
+                }
+            )
+
+        # Build metadata
+        metadata = {
+            "total_nodes": len(nodes),
+            "total_edges": len(edges),
+            "min_similarity": min_similarity,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+
+        logger.info(
+            f"Serving graph: {len(nodes)} nodes, {len(edges)} edges to user {user_id}"
+        )
+
+        return GraphDataResponse(nodes=nodes, edges=edges, metadata=metadata)
 
     except Exception as e:
-        logger.error(f"Failed to load graph data: {e}")
+        logger.error(f"Failed to get graph data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to load graph data: {str(e)}")
 
 
 @router.get("/documents/{doc_id}", response_model=DocumentDetailsResponse)
 async def get_document_details(
     doc_id: str,
-    graph_file: Optional[str] = "processed_files/graph_data.json",
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Get detailed information for a specific document.
 
-    Returns document metadata, tags, and preview.
+    Returns document metadata, tags, entities, and preview.
     """
-    graph_path = Path(graph_file)
-
-    if not graph_path.exists():
-        raise HTTPException(status_code=404, detail="Graph data not found")
-
     try:
-        with open(graph_path, "r", encoding="utf-8") as f:
-            graph_data = json.load(f)
+        user_uuid = await get_user_uuid(user_id, session)
+        doc_repo = DocumentRepository(session)
 
-        # Find document
-        document = next(
-            (node for node in graph_data["nodes"] if node["id"] == doc_id),
-            None,
-        )
+        # Get document with relations
+        document = await doc_repo.get_by_id(doc_id, user_uuid, load_relations=True)
 
         if not document:
-            raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
+            raise HTTPException(
+                status_code=404, detail=f"Document not found: {doc_id}"
+            )
 
-        return DocumentDetailsResponse(**document)
+        # Build hierarchical tag structure
+        high_level_tags = []
+        low_level_tags = []
+
+        for doc_tag in document.tags:
+            tag = doc_tag.tag
+            if doc_tag.tag_level == "high":
+                high_level_tags.append(tag.name)
+            elif doc_tag.tag_level == "low":
+                low_level_tags.append(tag.name)
+
+        # Extract entity names
+        entity_names = [doc_entity.entity.name for doc_entity in document.entities]
+
+        return DocumentDetailsResponse(
+            id=document.id,
+            title=document.title,
+            url=document.url or "",
+            summary=document.summary or "",
+            tags={"high_level": sorted(high_level_tags), "low_level": sorted(low_level_tags)},
+            entities=entity_names,
+            author=document.author or "Unknown",
+            modified=document.modified_at.isoformat() if document.modified_at else "",
+            preview=document.summary or (document.text_content or "")[:200] + "...",
+        )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get document details: {e}")
+        logger.error(f"Failed to get document details: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/search")
+@router.get("/search", response_model=SearchResponse)
 async def search_documents(
-    q: str,
-    graph_file: Optional[str] = "processed_files/graph_data.json",
+    q: str = Query(..., min_length=2),
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_async_session),
+    enabled_only: bool = Query(default=True),
 ):
     """
-    Search documents by title or preview content.
+    Search documents by title, summary, or content.
 
-    Returns list of matching documents.
+    Also searches in tags and entities.
     """
-    if not q or len(q) < 2:
-        raise HTTPException(status_code=400, detail="Query must be at least 2 characters")
-
-    graph_path = Path(graph_file)
-
-    if not graph_path.exists():
-        raise HTTPException(status_code=404, detail="Graph data not found")
-
     try:
-        with open(graph_path, "r", encoding="utf-8") as f:
-            graph_data = json.load(f)
+        user_uuid = await get_user_uuid(user_id, session)
+        doc_repo = DocumentRepository(session)
 
-        # Search in titles and previews
-        query_lower = q.lower()
+        # Search by text
+        documents = await doc_repo.search_by_text(q, user_uuid, enabled_only)
+
+        # Build results
         results = []
+        for doc in documents:
+            # Build hierarchical tag structure
+            high_level_tags = []
+            low_level_tags = []
 
-        for node in graph_data["nodes"]:
-            # Handle both old flat tags and new hierarchical tags
-            tags = node.get("tags", [])
-            if isinstance(tags, dict):
-                all_tags = tags.get("high_level", []) + tags.get("low_level", [])
-            else:
-                all_tags = tags
+            for doc_tag in doc.tags:
+                tag = doc_tag.tag
+                if doc_tag.tag_level == "high":
+                    high_level_tags.append(tag.name)
+                elif doc_tag.tag_level == "low":
+                    low_level_tags.append(tag.name)
 
-            if (query_lower in node["title"].lower()
-                or query_lower in node.get("preview", "").lower()
-                or any(query_lower in tag.lower() for tag in all_tags)):
-                results.append(node)
+            # Extract entity names
+            entity_names = [doc_entity.entity.name for doc_entity in doc.entities]
 
-        logger.info(f"Search '{q}' found {len(results)} results")
+            results.append(
+                {
+                    "id": doc.id,
+                    "title": doc.title,
+                    "url": doc.url or "",
+                    "summary": doc.summary or "",
+                    "tags": {
+                        "high_level": sorted(high_level_tags),
+                        "low_level": sorted(low_level_tags),
+                    },
+                    "entities": entity_names,
+                    "author": doc.author or "Unknown",
+                    "modified": doc.modified_at.isoformat() if doc.modified_at else "",
+                    "preview": doc.summary or (doc.text_content or "")[:200] + "...",
+                }
+            )
 
-        return {"query": q, "results": results, "total": len(results)}
+        logger.info(f"Search '{q}' found {len(results)} results for user {user_id}")
+
+        return SearchResponse(query=q, results=results, total=len(results))
 
     except Exception as e:
-        logger.error(f"Search failed: {e}")
+        logger.error(f"Search failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/tag-hierarchy")
+@router.get("/search/semantic")
+async def semantic_search(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(default=10, ge=1, le=50),
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_async_session),
+    enabled_only: bool = Query(default=True),
+):
+    """
+    Semantic search using embeddings and vector similarity.
+
+    Finds documents similar to the query text.
+    """
+    try:
+        from openai import OpenAI
+        from app.core.config import settings
+
+        user_uuid = await get_user_uuid(user_id, session)
+        doc_repo = DocumentRepository(session)
+
+        # Generate embedding for query
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        response = client.embeddings.create(model="text-embedding-3-small", input=q)
+
+        query_embedding = response.data[0].embedding
+
+        # Search similar documents
+        results = await doc_repo.search_similar(
+            embedding=query_embedding,
+            user_id=user_uuid,
+            limit=limit,
+            enabled_only=enabled_only,
+            min_similarity=0.0,  # Return all results sorted by similarity
+        )
+
+        # Build response
+        search_results = []
+        for doc, similarity in results:
+            search_results.append(
+                {
+                    "id": doc.id,
+                    "title": doc.title,
+                    "summary": doc.summary or "",
+                    "similarity": round(similarity, 4),
+                    "url": doc.url or "",
+                }
+            )
+
+        logger.info(
+            f"Semantic search '{q}' found {len(search_results)} results for user {user_id}"
+        )
+
+        return {"query": q, "results": search_results, "total": len(search_results)}
+
+    except Exception as e:
+        logger.error(f"Semantic search failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tag-hierarchy", response_model=TagHierarchyResponse)
 async def get_tag_hierarchy(
-    graph_file: Optional[str] = "processed_files/graph_data.json",
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Get the tag hierarchy structure.
 
-    Returns the tag hierarchy metadata showing high-level tags,
-    their children, and cross-cutting tags.
+    Returns high-level tags, their children, and orphan counts.
     """
-    graph_path = Path(graph_file)
-
-    if not graph_path.exists():
-        raise HTTPException(status_code=404, detail="Graph data not found")
-
     try:
-        with open(graph_path, "r", encoding="utf-8") as f:
-            graph_data = json.load(f)
+        user_uuid = await get_user_uuid(user_id, session)
+        tag_repo = TagRepository(session)
 
-        metadata = graph_data.get("metadata", {})
+        # Get full hierarchy
+        hierarchy = await tag_repo.get_hierarchy(user_uuid)
 
-        if not metadata.get("hierarchy_enabled"):
-            return {
-                "hierarchy_enabled": False,
-                "message": "Tag hierarchy is not enabled for this graph",
-            }
+        high_level_tags = hierarchy.get("high_level", {})
+        total_low_level = sum(
+            len(tag_data.get("children", [])) for tag_data in high_level_tags.values()
+        )
 
-        tag_hierarchy = metadata.get("tag_hierarchy", {})
+        logger.info(
+            f"Retrieved tag hierarchy for user {user_id}: "
+            f"{len(high_level_tags)} high-level tags, {total_low_level} low-level tags"
+        )
 
-        if not tag_hierarchy:
-            return {
-                "hierarchy_enabled": True,
-                "message": "No tag splits were created (all tags below threshold or LLM declined splitting)",
-                "tag_hierarchy": {},
-            }
-
-        # Separate high-level and low-level tags for easier consumption
-        high_level_tags = {
-            tag: info for tag, info in tag_hierarchy.items()
-            if info.get("type") == "high_level"
-        }
-
-        low_level_tags = {
-            tag: info for tag, info in tag_hierarchy.items()
-            if info.get("type") == "low_level"
-        }
-
-        cross_cutting_tags = {
-            tag: info for tag, info in low_level_tags.items()
-            if info.get("cross_cutting")
-        }
-
-        return {
-            "hierarchy_enabled": True,
-            "high_level_tags": high_level_tags,
-            "low_level_tags": low_level_tags,
-            "cross_cutting_tags": cross_cutting_tags,
-            "total_high_level": len(high_level_tags),
-            "total_low_level": len(low_level_tags),
-            "total_cross_cutting": len(cross_cutting_tags),
-        }
+        return TagHierarchyResponse(
+            hierarchy_enabled=True,
+            high_level_tags=high_level_tags,
+            total_high_level=len(high_level_tags),
+            total_low_level=total_low_level,
+        )
 
     except Exception as e:
-        logger.error(f"Failed to get tag hierarchy: {e}")
+        logger.error(f"Failed to get tag hierarchy: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/documents/{doc_id}/toggle")
+async def toggle_document_enabled(
+    doc_id: str,
+    enabled: bool = Query(...),
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Enable or disable a document's visibility in the graph.
+
+    Does not delete the document, just hides it from visualization.
+    """
+    try:
+        user_uuid = await get_user_uuid(user_id, session)
+        doc_repo = DocumentRepository(session)
+
+        document = await doc_repo.toggle_enabled(doc_id, user_uuid, enabled)
+
+        if not document:
+            raise HTTPException(
+                status_code=404, detail=f"Document not found: {doc_id}"
+            )
+
+        await session.commit()
+
+        logger.info(
+            f"User {user_id} {'enabled' if enabled else 'disabled'} document {doc_id}"
+        )
+
+        return {
+            "id": document.id,
+            "title": document.title,
+            "is_enabled": document.is_enabled,
+            "message": f"Document {'enabled' if enabled else 'disabled'} successfully",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to toggle document: {e}", exc_info=True)
+        await session.rollback()
         raise HTTPException(status_code=500, detail=str(e))

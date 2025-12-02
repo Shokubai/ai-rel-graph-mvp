@@ -25,22 +25,31 @@ def get_current_user_id(
     """
     try:
         token = credentials.credentials
+        logger.info(f"[AUTH] Attempting to decode JWT token (first 20 chars): {token[:20]}...")
+        logger.info(f"[AUTH] Using NEXTAUTH_SECRET: {settings.NEXTAUTH_SECRET[:10]}..." if settings.NEXTAUTH_SECRET else "[AUTH] NEXTAUTH_SECRET is None!")
+
         payload = jwt.decode(
             token,
             settings.NEXTAUTH_SECRET,
             algorithms=["HS256"],
         )
+        logger.info(f"[AUTH] Successfully decoded JWT. Payload: {payload}")
+
         user_id: str = payload.get("sub")
         if user_id is None:
+            logger.error("[AUTH] JWT payload missing 'sub' claim")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials",
             )
+
+        logger.info(f"[AUTH] Extracted user_id: {user_id}")
         return user_id
-    except JWTError:
+    except JWTError as e:
+        logger.error(f"[AUTH] JWT validation failed: {type(e).__name__}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
+            detail=f"Could not validate credentials: {str(e)}",
         )
 
 

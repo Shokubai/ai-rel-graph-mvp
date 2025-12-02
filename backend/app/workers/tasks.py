@@ -134,14 +134,34 @@ def process_drive_files_task(
                 },
             }
 
-        # Step 5: Process each file
+        # Step 5: Get user UUID for database checks
+        user_uuid = user.id
+
+        # Step 6: Process each file
         processed_documents = []
         failed_files = []
+        skipped_files = []
 
         for idx, file_metadata in enumerate(processable_files, 1):
             file_id = file_metadata["id"]
             file_name = file_metadata["name"]
             mime_type = file_metadata["mimeType"]
+
+            # Check if file is already processed in database
+            from app.db.models.document import Document
+            existing_doc = self.session.query(Document).filter(
+                Document.id == file_id,
+                Document.user_id == user_uuid
+            ).first()
+
+            if existing_doc:
+                logger.info(f"Skipping {idx}/{total_files}: {file_name} (already processed)")
+                skipped_files.append({
+                    "id": file_id,
+                    "name": file_name,
+                    "reason": "already_processed"
+                })
+                continue
 
             # Update task progress
             self.update_state(
@@ -210,11 +230,18 @@ def process_drive_files_task(
         # Step 7: Return summary
         total_words = sum(doc["metadata"]["word_count"] for doc in processed_documents)
 
+        message_parts = [f"Successfully processed {len(processed_documents)} files"]
+        if skipped_files:
+            message_parts.append(f"skipped {len(skipped_files)} already-processed files")
+        if failed_files:
+            message_parts.append(f"{len(failed_files)} failed")
+
         return {
             "status": "completed",
-            "message": f"Successfully processed {len(processed_documents)} files",
+            "message": ", ".join(message_parts),
             "documents_file": str(output_file),
             "total_documents": len(processed_documents),
+            "skipped_files": skipped_files,
             "failed_files": failed_files,
         }
 
@@ -237,6 +264,7 @@ def process_drive_files_task(
 )
 def generate_knowledge_graph_task(
     self: DatabaseTask,
+    user_id: str,
     documents_file: str,
     output_dir: str = "processed_files",
     similarity_threshold: float = 0.75,
@@ -246,38 +274,38 @@ def generate_knowledge_graph_task(
     top_k_neighbors: int = 2,
     min_similarity: float = 0.3,
     enable_hierarchy: bool = True,
-    hierarchy_split_threshold: int = 10,
+    hierarchy_split_threshold: int = 8,  # Hardcoded as requested
     hierarchy_cross_cutting_threshold: int = 5,
 ) -> Dict[str, Any]:
     """
-    Generate knowledge graph from extracted documents.
+    Generate knowledge graph from extracted documents and save to PostgreSQL.
 
     This task:
     1. Loads extracted documents from JSON file
     2. Generates OpenAI embeddings
-    3. Calculates similarity matrix
-    4. Extracts LLM-based tags, summaries, and entities
+    3. Extracts LLM-based tags, summaries, and entities
+    4. Calculates similarity matrix
     5. Builds tag hierarchy (if enabled)
-    6. Builds graph structure (nodes + edges)
-    7. Saves graph_data.json
+    6. Saves everything to PostgreSQL database
 
     Args:
+        user_id: User ID for multi-tenant isolation
         documents_file: Path to extracted documents JSON
-        output_dir: Directory to save graph output
-        similarity_threshold: Minimum similarity to create edge (0.0-1.0) - only used if use_top_k_similarity=False
+        output_dir: Directory to save graph output (kept for compatibility)
+        similarity_threshold: Minimum similarity to create edge (0.0-1.0)
         max_tags_per_doc: Maximum number of tags per document
         max_entities_per_doc: Maximum number of entities per document
         use_top_k_similarity: If True, use top-K neighbors approach (default: True)
         top_k_neighbors: Number of top similar documents per document (default: 2)
         min_similarity: Minimum similarity to create edge in top-K mode (default: 0.3)
         enable_hierarchy: If True, build hierarchical tag structure (default: True)
-        hierarchy_split_threshold: Min documents per tag to consider splitting (default: 10)
+        hierarchy_split_threshold: Min documents per tag to consider splitting (default: 8)
         hierarchy_cross_cutting_threshold: Min docs with tag combo for cross-cutting (default: 5)
 
     Returns:
         Dictionary with graph statistics
     """
-    logger.info(f"Generating knowledge graph from {documents_file}")
+    logger.info(f"Generating knowledge graph from {documents_file} for user {user_id}")
 
     try:
         # Step 1: Load extracted documents
@@ -338,41 +366,196 @@ def generate_knowledge_graph_task(
 
         graph_data = graph_builder.build_graph_from_documents(graph_documents)
 
-        # Step 4: Save graph data
+        # Step 4: Save to PostgreSQL database
         self.update_state(
             state="PROCESSING",
             meta={
                 "current": len(extracted_docs),
                 "total": len(extracted_docs),
-                "status": "Saving graph data...",
+                "status": "Saving to database...",
             },
         )
 
-        output_path = Path(output_dir) / "graph_data.json"
-        graph_builder.save_graph_to_file(graph_data, output_path)
+        # Import async dependencies
+        import asyncio
+        from uuid import UUID
+        from app.db.session import AsyncSessionLocal
+        from app.db.models.user import User
+        from app.db.models.document import Document
+        from app.db.models.tag import Tag
+        from app.db.models.entity import Entity
+        from app.db.models.document_tag import DocumentTag
+        from app.db.models.document_entity import DocumentEntity
+        from app.db.models.document_similarity import DocumentSimilarity
 
-        logger.info(f"Saved graph data to {output_path}")
+        async def save_to_database():
+            """Save graph data to PostgreSQL."""
+            # Look up User by google_user_id to get the actual UUID
+            from sqlalchemy import select as sa_select
 
-        # Step 5: Return summary
-        # Calculate average tags (handle both flat and hierarchical structure)
-        total_tags = 0
-        for node in graph_data["nodes"]:
-            tags = node.get("tags", [])
-            if isinstance(tags, dict):
-                # Hierarchical structure - count low-level tags
-                total_tags += len(tags.get("low_level", []))
-            else:
-                # Flat structure
-                total_tags += len(tags)
+            async with AsyncSessionLocal() as session:
+                # Get user UUID from google_user_id
+                user_result = await session.execute(
+                    sa_select(User).filter(User.google_user_id == user_id)
+                )
+                user = user_result.scalar_one_or_none()
 
-        avg_tags = total_tags / len(graph_data["nodes"]) if graph_data["nodes"] else 0
+                if not user:
+                    raise ValueError(f"User not found with google_user_id: {user_id}")
+
+                user_uuid = user.id
+                logger.info(f"Found user UUID {user_uuid} for google_user_id {user_id}")
+
+                # Continue with saving...
+                # Create documents
+                for node in graph_data["nodes"]:
+                    # Find embedding from original extracted_docs
+                    orig_doc = next((d for d in extracted_docs if d["id"] == node["id"]), None)
+
+                    doc = Document(
+                        id=node["id"],
+                        user_id=user_uuid,
+                        title=node["title"],
+                        url=node.get("url", ""),
+                        author=node.get("author", "Unknown"),
+                        modified_at=None,  # TODO: Parse from node["modified"]
+                        text_content=orig_doc.get("text_content", "") if orig_doc else "",
+                        summary=node.get("summary", ""),
+                        word_count=orig_doc.get("metadata", {}).get("word_count", 0) if orig_doc else 0,
+                        embedding=None,  # Will be set by embedding service
+                        is_enabled=True,
+                    )
+                    session.add(doc)
+
+                await session.flush()
+
+                # Create tags and associations
+                tag_cache = {}  # name -> Tag object
+
+                for node in graph_data["nodes"]:
+                    tags_data = node.get("tags", {})
+                    high_level_tags = tags_data.get("high_level", []) if isinstance(tags_data, dict) else []
+                    low_level_tags = tags_data.get("low_level", []) if isinstance(tags_data, dict) else []
+
+                    # Create high-level tags
+                    for tag_name in high_level_tags:
+                        if tag_name not in tag_cache:
+                            tag = Tag(
+                                user_id=user_uuid,
+                                name=tag_name,
+                                tag_type="high_level",
+                            )
+                            session.add(tag)
+                            await session.flush()
+                            await session.refresh(tag)
+                            tag_cache[tag_name] = tag
+
+                        # Create association
+                        doc_tag = DocumentTag(
+                            document_id=node["id"],
+                            tag_id=tag_cache[tag_name].id,
+                            tag_level="high",
+                        )
+                        session.add(doc_tag)
+
+                    # Create low-level tags
+                    for tag_name in low_level_tags:
+                        if tag_name not in tag_cache:
+                            tag = Tag(
+                                user_id=user_uuid,
+                                name=tag_name,
+                                tag_type="low_level",
+                            )
+                            session.add(tag)
+                            await session.flush()
+                            await session.refresh(tag)
+                            tag_cache[tag_name] = tag
+
+                        # Create association
+                        doc_tag = DocumentTag(
+                            document_id=node["id"],
+                            tag_id=tag_cache[tag_name].id,
+                            tag_level="low",
+                        )
+                        session.add(doc_tag)
+
+                await session.flush()
+
+                # Create entities and associations
+                entity_cache = {}  # name -> Entity object
+
+                for node in graph_data["nodes"]:
+                    entities = node.get("entities", [])
+
+                    for entity_name in entities:
+                        if entity_name not in entity_cache:
+                            entity = Entity(
+                                user_id=user_uuid,
+                                name=entity_name,
+                                entity_type="UNKNOWN",  # TODO: Extract type from LLM
+                            )
+                            session.add(entity)
+                            await session.flush()
+                            await session.refresh(entity)
+                            entity_cache[entity_name] = entity
+
+                        # Create association
+                        doc_entity = DocumentEntity(
+                            document_id=node["id"],
+                            entity_id=entity_cache[entity_name].id,
+                        )
+                        session.add(doc_entity)
+
+                await session.flush()
+
+                # Create similarity edges
+                for edge in graph_data["edges"]:
+                    source = edge["source"]
+                    target = edge["target"]
+                    score = edge["similarity"]
+
+                    # Skip self-loops (shouldn't happen, but be defensive)
+                    if source == target:
+                        logger.warning(f"Skipping self-loop edge: {source} -> {target}")
+                        continue
+
+                    # Canonical ordering (ensure source < target for database constraint)
+                    if source > target:
+                        source, target = target, source
+
+                    # Double-check constraint will be satisfied
+                    if source >= target:
+                        logger.error(f"Constraint violation would occur: {source} >= {target}")
+                        continue
+
+                    similarity = DocumentSimilarity(
+                        source_document_id=source,
+                        target_document_id=target,
+                        similarity_score=score,
+                    )
+                    session.add(similarity)
+
+                await session.commit()
+
+                logger.info(f"Saved {len(graph_data['nodes'])} documents to PostgreSQL")
+
+                return {
+                    "nodes": len(graph_data["nodes"]),
+                    "edges": len(graph_data["edges"]),
+                    "tags": len(tag_cache),
+                    "entities": len(entity_cache),
+                }
+
+        # Run async save
+        result = asyncio.run(save_to_database())
 
         return {
             "status": "completed",
-            "message": f"Generated knowledge graph with {len(graph_data['nodes'])} nodes and {len(graph_data['edges'])} edges",
-            "graph_file": str(output_path),
-            "nodes": len(graph_data["nodes"]),
-            "edges": len(graph_data["edges"]),
+            "message": f"Generated knowledge graph with {result['nodes']} nodes and {result['edges']} edges",
+            "nodes": result["nodes"],
+            "edges": result["edges"],
+            "tags": result["tags"],
+            "entities": result["entities"],
         }
 
     except Exception as e:

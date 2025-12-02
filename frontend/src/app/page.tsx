@@ -6,7 +6,7 @@ import { Navbar } from "@/components/Navbar";
 import { GraphView } from "@/components/GraphView";
 import { FileExplorer } from "@/components/FileExplorer";
 import { ProcessingStatus } from "@/components/ProcessingStatus";
-import { GraphNode, GraphEdge } from "@/hooks/useGraph";
+import { GraphNode, GraphEdge, useGraphData } from "@/hooks/useGraph";
 import axios from "axios";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -17,23 +17,36 @@ interface GraphData {
   metadata?: Record<string, unknown>;
 }
 
-type AppState = "explorer" | "processing" | "graph" | "empty";
+type AppState = "explorer" | "processing" | "graph" | "empty" | "loading";
 
 export default function Home() {
   const { data: session, status } = useSession();
   const [appState, setAppState] = useState<AppState>("empty");
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [processingTaskId, setProcessingTaskId] = useState<string | null>(null);
+  const { data: existingGraphData, isLoading: isLoadingGraph } = useGraphData();
 
   useEffect(() => {
     if (status === "authenticated" && session && appState === "empty") {
-      // Only transition to explorer on initial authentication
-      // Don't reset state on session updates (e.g., when window refocuses)
-      setAppState("explorer");
+      // Check if graph data exists in database
+      setAppState("loading");
     } else if (status === "unauthenticated") {
       setAppState("empty");
     }
   }, [status, session, appState]);
+
+  // Once graph data is loaded, decide which view to show
+  useEffect(() => {
+    if (appState === "loading" && !isLoadingGraph) {
+      if (existingGraphData && existingGraphData.nodes.length > 0) {
+        // Graph data exists, show graph view automatically
+        setAppState("graph");
+      } else {
+        // No graph data, show explorer
+        setAppState("explorer");
+      }
+    }
+  }, [appState, isLoadingGraph, existingGraphData]);
 
   const handleUpdateFiles = () => {
     // Show file explorer to select new files

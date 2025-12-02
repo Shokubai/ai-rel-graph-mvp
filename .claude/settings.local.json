@@ -16,7 +16,10 @@
       "Bash(docker-compose restart:*)",
       "Bash(docker-compose logs:*)",
       "Bash(find:*)",
-      "Bash(docker-compose rm:*)"
+      "Bash(docker-compose rm:*)",
+      "Bash(mkdir:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker logs:*)"
     ],
     "deny": [],
     "ask": []

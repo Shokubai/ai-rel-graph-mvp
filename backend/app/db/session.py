@@ -31,3 +31,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             yield session
         finally:
             await session.close()
+
+
+# Alias for backwards compatibility
+get_async_session = get_session
