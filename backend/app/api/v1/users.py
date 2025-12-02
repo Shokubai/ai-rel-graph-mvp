@@ -8,7 +8,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.auth import get_current_user_id
-from app.models.user import User
+from app.db.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/users", tags=["users"])

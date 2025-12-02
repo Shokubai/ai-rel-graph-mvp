@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.celery_app import celery_app
 from app.core.database import SessionLocal
-from app.models.user import User
+from app.db.models.user import User
 from app.services.drive_service import DriveService
 from app.services.graph_builder import GraphBuilder
 from app.services.text_extraction import TextExtractor
