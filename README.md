@@ -32,7 +32,13 @@ Unlike folder hierarchies or keyword search, AIRelGraph reveals **hidden pattern
 
 ### Prerequisites
 
+**For Docker deployment (recommended):**
 - Docker & Docker Compose
+- Python 3.10+ (tested up to 3.13)
+- Node.js 18+
+- Alembic
+- Poetry (Python package manager)
+- pnpm (Node package manager)
 - Make
 
 ### Setup & Run
@@ -42,73 +48,84 @@ Unlike folder hierarchies or keyword search, AIRelGraph reveals **hidden pattern
 git clone <your-repo-url>
 cd ai-rel-graph-mvp
 
-# 2. Setup environment files and dependencies
+# 2. Setup frontend environment
+cp frontend/.env.example frontend/.env.production
+```
+
+Edit `frontend/.env.production` with your configuration:
+
+```bash
+# API Configuration
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_WS_URL=ws://localhost:8000
+
+# NextAuth Configuration
+# IMPORTANT: This MUST match the backend NEXTAUTH_SECRET exactly
+NEXTAUTH_SECRET=your-secret-key-here
+NEXTAUTH_URL=http://localhost
+
+# Google OAuth Configuration
+# IMPORTANT: These MUST match the backend values exactly
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+
+# Internal API URL (for server-side requests from NextAuth)
+# This is used by the NextAuth callbacks to sync tokens to the backend
+INTERNAL_API_URL=http://localhost:8000
+```
+
+```bash
+# 3. Setup backend environment
+cp backend/.env.example backend/.env
+```
+
+Edit `backend/.env` with your configuration:
+
+```bash
+# Database
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=semantic_graph
+
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# Celery
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/0
+
+# Google OAuth Configuration (MUST match frontend values)
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+
+# NextAuth JWT Secret (MUST match frontend NEXTAUTH_SECRET)
+NEXTAUTH_SECRET=your-secret-key-here
+
+# CORS
+ALLOWED_ORIGINS=["http://localhost:3000","http://localhost"]
+
+# OpenAI API Key (for LLM tagging)
+OPENAI_API_KEY=your-openai-api-key
+```
+
+```bash
+# 4. Setup dependencies
 make setup
 
-# 3. Start all services (PostgreSQL, Redis, FastAPI, Next.js, Celery)
+# 5. Start all services (PostgreSQL, Redis, FastAPI, Next.js, Celery)
 make docker-up
 
-# 4. Wait for services to initialize, then run database migrations
-sleep 10
-make db-upgrade
-
-# 5. Verify everything works
-./scripts/test-setup.sh
+# 6. Wait for services to initialize, then run database migrations
+docker exec ai-rel-graph-backend poetry run alembic upgrade head
 ```
 
 **Access the application:**
 - 🌐 Frontend: http://localhost
 - 🔌 Backend API: http://localhost:8000
 - 📖 API Docs: http://localhost:8000/docs
-
-### Try the Demo
-
-See the system in action:
-
-```bash
-# Realistic demo (11 documents)
-make demo
-
-# Large-scale demo (100 synthetic documents)
-make demo-large
-
-# Real PDFs from Kaggle (requires Kaggle API credentials)
-make demo-kaggle          # 50 PDFs
-make demo-kaggle-large    # 100 PDFs
-make demo-custom NUM=75   # Custom count
-
-# Custom similarity threshold
-make demo-threshold THRESHOLD=0.6
-```
-
-**Kaggle Setup**: To use real PDFs, place your `kaggle.json` in `~/.kaggle/` (get it from [kaggle.com/settings](https://www.kaggle.com/settings)) and accept the [dataset terms](https://www.kaggle.com/datasets/manisha717/dataset-of-pdf-files).
-
-### Visualize the Results
-
-After running a demo, visualize the semantic graph:
-
-```bash
-# Interactive visualization (spring layout)
-make visualize
-
-# Circular cluster layout
-make visualize-circular
-
-# Cluster statistics
-make visualize-stats
-
-# Save to file
-make visualize-save FILE=my_graph.png
-
-# Generate all visualizations
-make visualize-all  # Creates graph_spring.png, graph_circular.png, graph_stats.png
-```
-
-The visualization shows:
-- **Nodes**: Documents (size = number of connections)
-- **Edges**: Semantic relationships (thickness = similarity strength)
-- **Colors**: Discovered communities/clusters
-- **Legend**: Cluster names with document counts
 
 ## 🏗️ Architecture
 

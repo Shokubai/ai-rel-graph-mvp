@@ -295,3 +295,18 @@ class DocumentRepository(BaseRepository[Document]):
         )
         await self.session.flush()
         return result.rowcount > 0
+
+    async def delete_all_for_user(self, user_id: UUID) -> int:
+        """Delete all documents for a user.
+
+        Args:
+            user_id: User UUID
+
+        Returns:
+            Number of deleted documents
+        """
+        result = await self.session.execute(
+            delete(Document).filter(Document.user_id == user_id)
+        )
+        await self.session.flush()
+        return result.rowcount

@@ -212,6 +212,94 @@ async def get_graph_generation_status(task_id: str):
         }
 
 
+@router.get("/documents")
+async def list_documents(
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_async_session),
+    enabled_only: bool = Query(default=False),
+):
+    """
+    List all documents for the current user.
+
+    Returns document metadata for the document manager UI.
+    """
+    try:
+        user_uuid = await get_user_uuid(user_id, session)
+        doc_repo = DocumentRepository(session)
+
+        documents = await doc_repo.list_by_user(
+            user_uuid, enabled_only=enabled_only, load_relations=True
+        )
+
+        results = []
+        for doc in documents:
+            # Build hierarchical tag structure
+            high_level_tags = []
+            low_level_tags = []
+
+            for doc_tag in doc.tags:
+                tag = doc_tag.tag
+                if doc_tag.tag_level == "high":
+                    high_level_tags.append(tag.name)
+                elif doc_tag.tag_level == "low":
+                    low_level_tags.append(tag.name)
+
+            results.append({
+                "id": doc.id,
+                "title": doc.title,
+                "url": doc.url or "",
+                "summary": doc.summary or "",
+                "tags": {
+                    "high_level": sorted(high_level_tags),
+                    "low_level": sorted(low_level_tags),
+                },
+                "author": doc.author or "Unknown",
+                "modified": doc.modified_at.isoformat() if doc.modified_at else "",
+                "is_enabled": doc.is_enabled,
+            })
+
+        logger.info(f"Listed {len(results)} documents for user {user_id}")
+
+        return {"documents": results, "total": len(results)}
+
+    except Exception as e:
+        logger.error(f"Failed to list documents: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/documents/delete-all")
+async def delete_all_documents(
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Delete all documents for the current user.
+
+    This is a destructive operation that removes all documents,
+    their tags, entities, and similarity relationships.
+    """
+    try:
+        user_uuid = await get_user_uuid(user_id, session)
+        doc_repo = DocumentRepository(session)
+
+        # Get count before deletion
+        documents = await doc_repo.list_by_user(user_uuid, enabled_only=False)
+        count = len(documents)
+
+        # Delete all documents (cascade will handle related records)
+        await doc_repo.delete_all_for_user(user_uuid)
+        await session.commit()
+
+        logger.info(f"Deleted {count} documents for user {user_id}")
+
+        return {"message": f"Deleted {count} documents", "count": count}
+
+    except Exception as e:
+        logger.error(f"Failed to delete all documents: {e}", exc_info=True)
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/data", response_model=GraphDataResponse)
 async def get_graph_data(
     user_id: str = Depends(get_current_user_id),

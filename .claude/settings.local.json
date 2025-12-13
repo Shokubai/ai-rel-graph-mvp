@@ -19,7 +19,8 @@
       "Bash(docker-compose rm:*)",
       "Bash(mkdir:*)",
       "Bash(docker ps:*)",
-      "Bash(docker logs:*)"
+      "Bash(docker logs:*)",
+      "Bash(make db-upgrade:*)"
     ],
     "deny": [],
     "ask": []
