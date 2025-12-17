@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
 
     # CORS
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost"]
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost", "https://arg.kaelem.dev"]
 
     @property
     def DATABASE_URL(self) -> str:
