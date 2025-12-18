@@ -28,8 +28,16 @@ interface FileProcessingStatus {
   current_file?: string;
   status?: string;
   result?: {
+    // Old two-step flow (Google Drive)
     documents_file?: string;
     total_documents?: number;
+    // New one-step flow (local upload)
+    status?: string;
+    nodes?: number;
+    edges?: number;
+    tags?: number;
+    entities?: number;
+    // Common
     failed_files?: Array<{ file: string; error: string }>;
   };
   error?: string;
@@ -120,10 +128,22 @@ export function ProcessingStatus({
 
         setFileStatus(response.data);
 
-        // If processing completed successfully, start graph generation
+        // If processing completed successfully
         if (response.data.state === "SUCCESS") {
           clearInterval(pollInterval);
-          await startGraphGeneration(response.data.result?.documents_file);
+
+          // Check if this is a one-step flow (local upload) that already built the graph
+          const result = response.data.result;
+          if (result?.status === "completed" && result?.nodes !== undefined) {
+            // One-step flow: graph already built, skip to completion
+            setStage("complete");
+            setTimeout(() => {
+              onComplete();
+            }, 1500);
+          } else {
+            // Two-step flow: need to start graph generation with documents file
+            await startGraphGeneration(result?.documents_file);
+          }
         } else if (response.data.state === "FAILURE") {
           clearInterval(pollInterval);
           setError(response.data.error || "File processing failed");

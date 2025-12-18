@@ -897,14 +897,16 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                 <p className="text-gray-400">{selectedNode.modified}</p>
               </div>
 
-              <a
-                href={selectedNode.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block w-full text-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
-              >
-                Open Document
-              </a>
+              {selectedNode.url && (
+                <a
+                  href={selectedNode.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full text-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+                >
+                  Open Document
+                </a>
+              )}
             </div>
           </div>
         )}
