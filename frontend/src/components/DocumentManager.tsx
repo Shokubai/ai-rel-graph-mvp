@@ -190,7 +190,7 @@ export default function DocumentManager({ onDocumentToggle, onProcessingStart, o
 
     // Create nodes for all documents
     docs.forEach((doc) => {
-      const isFolder = doc.mime_type === "application/vnd.google-apps.folder";
+      const isFolder = (doc.mime_type || "") === "application/vnd.google-apps.folder";
       nodeMap.set(doc.id, {
         id: doc.id,
         title: doc.title,
@@ -311,7 +311,7 @@ export default function DocumentManager({ onDocumentToggle, onProcessingStart, o
   const selectAll = () => {
     const newChanges = new Map(pendingChanges);
     documents.forEach((doc: Document) => {
-      if (!doc.mime_type.includes("folder") && !doc.is_enabled) {
+      if (!(doc.mime_type || "").includes("folder") && !doc.is_enabled) {
         newChanges.set(doc.id, true);
       }
     });
@@ -322,7 +322,7 @@ export default function DocumentManager({ onDocumentToggle, onProcessingStart, o
   const deselectAll = () => {
     const newChanges = new Map(pendingChanges);
     documents.forEach((doc: Document) => {
-      if (!doc.mime_type.includes("folder") && doc.is_enabled) {
+      if (!(doc.mime_type || "").includes("folder") && doc.is_enabled) {
         newChanges.set(doc.id, false);
       }
     });
@@ -442,16 +442,17 @@ export default function DocumentManager({ onDocumentToggle, onProcessingStart, o
     }
   };
 
-  const getFileIcon = (mimeType: string) => {
-    if (mimeType === "application/vnd.google-apps.folder") {
+  const getFileIcon = (mimeType: string | undefined) => {
+    const type = mimeType || "";
+    if (type === "application/vnd.google-apps.folder") {
       return "📁";
-    } else if (mimeType.includes("document")) {
+    } else if (type.includes("document")) {
       return "📄";
-    } else if (mimeType.includes("spreadsheet")) {
+    } else if (type.includes("spreadsheet")) {
       return "📊";
-    } else if (mimeType.includes("presentation")) {
+    } else if (type.includes("presentation")) {
       return "📽️";
-    } else if (mimeType.includes("pdf")) {
+    } else if (type.includes("pdf")) {
       return "📕";
     }
     return "📎";
@@ -573,8 +574,8 @@ export default function DocumentManager({ onDocumentToggle, onProcessingStart, o
     );
   }
 
-  const totalDocs = documents.filter((d: Document) => !d.mime_type.includes("folder")).length;
-  const enabledDocs = documents.filter((d: Document) => !d.mime_type.includes("folder") && d.is_enabled).length;
+  const totalDocs = documents.filter((d: Document) => !(d.mime_type || "").includes("folder")).length;
+  const enabledDocs = documents.filter((d: Document) => !(d.mime_type || "").includes("folder") && d.is_enabled).length;
 
   return (
     <div className="h-full flex flex-col bg-gray-900">

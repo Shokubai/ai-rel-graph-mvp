@@ -172,16 +172,17 @@ export function FileExplorer({ onProcessingStart, onGraphDataUpload }: FileExplo
     }
   };
 
-  const getFileIcon = (mimeType: string) => {
-    if (mimeType === "application/vnd.google-apps.folder") {
+  const getFileIcon = (mimeType: string | undefined) => {
+    const type = mimeType || "";
+    if (type === "application/vnd.google-apps.folder") {
       return "📁";
-    } else if (mimeType.includes("document")) {
+    } else if (type.includes("document")) {
       return "📄";
-    } else if (mimeType.includes("spreadsheet")) {
+    } else if (type.includes("spreadsheet")) {
       return "📊";
-    } else if (mimeType.includes("presentation")) {
+    } else if (type.includes("presentation")) {
       return "📽️";
-    } else if (mimeType.includes("pdf")) {
+    } else if (type.includes("pdf")) {
       return "📕";
     }
     return "📎";
@@ -290,7 +291,7 @@ export function FileExplorer({ onProcessingStart, onGraphDataUpload }: FileExplo
                       />
                       <span className="text-2xl">{getFileIcon(file.mimeType)}</span>
                       <div className="flex-1 min-w-0">
-                        {file.mimeType === "application/vnd.google-apps.folder" ? (
+                        {(file.mimeType || "") === "application/vnd.google-apps.folder" ? (
                           <button
                             onClick={() => handleFolderClick(file)}
                             className="text-blue-400 hover:text-blue-300 font-medium text-left truncate block w-full"
@@ -303,7 +304,7 @@ export function FileExplorer({ onProcessingStart, onGraphDataUpload }: FileExplo
                           </span>
                         )}
                         <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
-                          <span>{file.mimeType.split(".").pop()}</span>
+                          <span>{(file.mimeType || "").split(".").pop()}</span>
                           {file.modifiedTime && (
                             <span>
                               Modified: {new Date(file.modifiedTime).toLocaleDateString()}

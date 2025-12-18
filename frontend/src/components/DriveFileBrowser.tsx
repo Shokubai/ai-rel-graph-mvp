@@ -301,7 +301,7 @@ export function DriveFileBrowser({ onGraphGenerated }: DriveFileBrowserProps) {
             >
               <div className="font-medium">{file.name}</div>
               <div className="text-sm text-gray-600">
-                {file.mimeType.includes("folder") ? "Folder" : "File"} •{" "}
+                {(file.mimeType || "").includes("folder") ? "Folder" : "File"} •{" "}
                 {new Date(file.modifiedTime).toLocaleDateString()}
               </div>
             </div>
