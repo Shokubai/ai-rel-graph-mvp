@@ -228,6 +228,28 @@ Should this tag be split into sub-categories? If yes, suggest the sub-tags."""
             reason = result.get("reason", "")
 
             if should_split and sub_tags:
+                # Filter out sub-tags that match the parent tag name (case-insensitive)
+                # This prevents duplicate tag names at different levels
+                parent_lower = parent_tag.lower().strip()
+                original_count = len(sub_tags)
+                sub_tags = [
+                    tag for tag in sub_tags
+                    if tag.lower().strip() != parent_lower
+                ]
+
+                if len(sub_tags) < original_count:
+                    logger.warning(
+                        f"Filtered out {original_count - len(sub_tags)} sub-tag(s) "
+                        f"that matched parent tag name '{parent_tag}'"
+                    )
+
+                # If all sub-tags were filtered out, don't split
+                if not sub_tags:
+                    logger.info(
+                        f"All sub-tags matched parent name, NOT splitting '{parent_tag}'"
+                    )
+                    return None
+
                 logger.info(
                     f"LLM suggests splitting '{parent_tag}' into {len(sub_tags)} sub-tags: {sub_tags}. "
                     f"Reason: {reason}"
@@ -272,6 +294,23 @@ Should this tag be split into sub-categories? If yes, suggest the sub-tags."""
                 # On error, assign no sub-tags (safer than guessing)
                 for doc in batch:
                     reassignments[doc["id"]] = []
+
+        # Filter out any reassignments to tags matching the parent name (case-insensitive)
+        # This prevents duplicate tag names at different hierarchy levels
+        parent_lower = parent_tag.lower().strip()
+        filtered_count = 0
+        for doc_id, assigned_tags in reassignments.items():
+            original_len = len(assigned_tags)
+            reassignments[doc_id] = [
+                tag for tag in assigned_tags
+                if tag.lower().strip() != parent_lower
+            ]
+            filtered_count += original_len - len(reassignments[doc_id])
+
+        if filtered_count > 0:
+            logger.warning(
+                f"Filtered {filtered_count} reassignment(s) that matched parent tag name '{parent_tag}'"
+            )
 
         logger.info(
             f"Reassigned {len(documents)} documents from '{parent_tag}' to sub-tags. "

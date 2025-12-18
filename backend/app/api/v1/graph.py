@@ -663,3 +663,120 @@ async def toggle_document_enabled(
         logger.error(f"Failed to toggle document: {e}", exc_info=True)
         await session.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class TagCleanupResponse(BaseModel):
+    """Response model for tag cleanup endpoint."""
+
+    cleaned_tags: List[str] = Field(description="Tag names that were consolidated")
+    promoted_associations: int = Field(description="Number of document-tag associations promoted to high-level")
+    deleted_tags: int = Field(description="Number of redundant low-level tags deleted")
+    message: str
+
+
+@router.post("/cleanup-duplicate-tags", response_model=TagCleanupResponse)
+async def cleanup_duplicate_tags(
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Clean up duplicate tags that exist at both high-level and low-level.
+
+    This endpoint:
+    1. Finds tags with the same name (case-insensitive) at different levels
+    2. Promotes low-level document associations to high-level
+    3. Deletes redundant low-level tags
+
+    This fixes the issue where document counts are aggregated incorrectly
+    when the same tag name exists at multiple hierarchy levels.
+    """
+    from sqlalchemy import select, delete, func
+    from app.db.models.tag import Tag
+    from app.db.models.document_tag import DocumentTag
+
+    try:
+        user_uuid = await get_user_uuid(user_id, session)
+
+        # Get all tags for this user
+        tags_result = await session.execute(
+            select(Tag).filter(Tag.user_id == user_uuid)
+        )
+        all_tags = tags_result.scalars().all()
+
+        # Group tags by lowercase name
+        tag_groups = {}
+        for tag in all_tags:
+            key = tag.name.lower().strip()
+            if key not in tag_groups:
+                tag_groups[key] = {"high_level": [], "low_level": []}
+            tag_groups[key][tag.tag_type].append(tag)
+
+        # Find groups with both high and low level tags
+        cleaned_tags = []
+        promoted_count = 0
+        deleted_count = 0
+
+        for tag_name, levels in tag_groups.items():
+            if levels["high_level"] and levels["low_level"]:
+                # Use the first high-level tag as the canonical one
+                canonical_tag = levels["high_level"][0]
+                cleaned_tags.append(canonical_tag.name)
+
+                logger.info(
+                    f"Consolidating duplicate tag '{tag_name}': "
+                    f"{len(levels['high_level'])} high-level, {len(levels['low_level'])} low-level"
+                )
+
+                # For each low-level tag with the same name
+                for low_tag in levels["low_level"]:
+                    # Get all document associations for this low-level tag
+                    doc_tags_result = await session.execute(
+                        select(DocumentTag).filter(DocumentTag.tag_id == low_tag.id)
+                    )
+                    doc_tags = doc_tags_result.scalars().all()
+
+                    for doc_tag in doc_tags:
+                        # Check if this document already has a high-level association with canonical tag
+                        existing_result = await session.execute(
+                            select(DocumentTag).filter(
+                                DocumentTag.document_id == doc_tag.document_id,
+                                DocumentTag.tag_id == canonical_tag.id,
+                                DocumentTag.tag_level == "high"
+                            )
+                        )
+                        existing = existing_result.scalar_one_or_none()
+
+                        if existing:
+                            # Document already has high-level association, just delete the low-level one
+                            await session.delete(doc_tag)
+                        else:
+                            # Promote: update the association to point to canonical tag at high level
+                            doc_tag.tag_id = canonical_tag.id
+                            doc_tag.tag_level = "high"
+                            promoted_count += 1
+
+                    # Delete the redundant low-level tag
+                    await session.delete(low_tag)
+                    deleted_count += 1
+
+        await session.commit()
+
+        message = (
+            f"Cleaned up {len(cleaned_tags)} duplicate tag(s). "
+            f"Promoted {promoted_count} association(s) to high-level. "
+            f"Deleted {deleted_count} redundant low-level tag(s)."
+        )
+
+        logger.info(f"Tag cleanup for user {user_id}: {message}")
+
+        return TagCleanupResponse(
+            cleaned_tags=cleaned_tags,
+            promoted_associations=promoted_count,
+            deleted_tags=deleted_count,
+            message=message,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to cleanup duplicate tags: {e}", exc_info=True)
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -50,6 +50,98 @@ class DatabaseTask(Task):
             self._session = None
 
 
+async def cleanup_duplicate_tags_for_user(session, user_uuid) -> Dict[str, Any]:
+    """
+    Clean up duplicate tags that exist at both high-level and low-level for a user.
+
+    This function:
+    1. Finds tags with the same name (case-insensitive) at different levels
+    2. Promotes low-level document associations to high-level
+    3. Deletes redundant low-level tags
+
+    Args:
+        session: Async database session
+        user_uuid: User UUID
+
+    Returns:
+        Dictionary with cleanup results
+    """
+    from sqlalchemy import select
+    from app.db.models.tag import Tag
+    from app.db.models.document_tag import DocumentTag
+
+    # Get all tags for this user
+    tags_result = await session.execute(
+        select(Tag).filter(Tag.user_id == user_uuid)
+    )
+    all_tags = tags_result.scalars().all()
+
+    # Group tags by lowercase name
+    tag_groups = {}
+    for tag in all_tags:
+        key = tag.name.lower().strip()
+        if key not in tag_groups:
+            tag_groups[key] = {"high_level": [], "low_level": []}
+        tag_groups[key][tag.tag_type].append(tag)
+
+    # Find groups with both high and low level tags
+    cleaned_tags = []
+    promoted_count = 0
+    deleted_count = 0
+
+    for tag_name, levels in tag_groups.items():
+        if levels["high_level"] and levels["low_level"]:
+            # Use the first high-level tag as the canonical one
+            canonical_tag = levels["high_level"][0]
+            cleaned_tags.append(canonical_tag.name)
+
+            logger.info(
+                f"Consolidating duplicate tag '{tag_name}': "
+                f"{len(levels['high_level'])} high-level, {len(levels['low_level'])} low-level"
+            )
+
+            # For each low-level tag with the same name
+            for low_tag in levels["low_level"]:
+                # Get all document associations for this low-level tag
+                doc_tags_result = await session.execute(
+                    select(DocumentTag).filter(DocumentTag.tag_id == low_tag.id)
+                )
+                doc_tags = doc_tags_result.scalars().all()
+
+                for doc_tag in doc_tags:
+                    # Check if this document already has a high-level association with canonical tag
+                    existing_result = await session.execute(
+                        select(DocumentTag).filter(
+                            DocumentTag.document_id == doc_tag.document_id,
+                            DocumentTag.tag_id == canonical_tag.id,
+                            DocumentTag.tag_level == "high"
+                        )
+                    )
+                    existing = existing_result.scalar_one_or_none()
+
+                    if existing:
+                        # Document already has high-level association, just delete the low-level one
+                        await session.delete(doc_tag)
+                    else:
+                        # Promote: update the association to point to canonical tag at high level
+                        doc_tag.tag_id = canonical_tag.id
+                        doc_tag.tag_level = "high"
+                        promoted_count += 1
+
+                # Delete the redundant low-level tag
+                await session.delete(low_tag)
+                deleted_count += 1
+
+    if cleaned_tags:
+        await session.commit()
+
+    return {
+        "cleaned_tags": cleaned_tags,
+        "promoted_associations": promoted_count,
+        "deleted_tags": deleted_count,
+    }
+
+
 @celery_app.task(
     bind=True,
     base=DatabaseTask,
@@ -430,7 +522,9 @@ def generate_knowledge_graph_task(
                 await session.flush()
 
                 # Create tags and associations
-                tag_cache = {}  # name -> Tag object
+                # Track tag name -> (Tag object, original_level) to prevent duplicates
+                tag_cache = {}  # name (lowercase) -> (Tag, tag_type)
+                high_level_tag_names = set()  # Track high-level tags for deduplication
 
                 for node in graph_data["nodes"]:
                     tags_data = node.get("tags", {})
@@ -439,7 +533,10 @@ def generate_knowledge_graph_task(
 
                     # Create high-level tags
                     for tag_name in high_level_tags:
-                        if tag_name not in tag_cache:
+                        tag_key = tag_name.lower().strip()
+                        high_level_tag_names.add(tag_key)
+
+                        if tag_key not in tag_cache:
                             tag = Tag(
                                 user_id=user_uuid,
                                 name=tag_name,
@@ -448,19 +545,30 @@ def generate_knowledge_graph_task(
                             session.add(tag)
                             await session.flush()
                             await session.refresh(tag)
-                            tag_cache[tag_name] = tag
+                            tag_cache[tag_key] = (tag, "high_level")
 
                         # Create association
                         doc_tag = DocumentTag(
                             document_id=node["id"],
-                            tag_id=tag_cache[tag_name].id,
+                            tag_id=tag_cache[tag_key][0].id,
                             tag_level="high",
                         )
                         session.add(doc_tag)
 
-                    # Create low-level tags
+                    # Create low-level tags (skip if same name exists as high-level)
                     for tag_name in low_level_tags:
-                        if tag_name not in tag_cache:
+                        tag_key = tag_name.lower().strip()
+
+                        # Skip if this tag name already exists as high-level
+                        # The document is already associated via the high-level tag
+                        if tag_key in high_level_tag_names:
+                            logger.warning(
+                                f"Skipping low-level tag '{tag_name}' for doc {node['id']} - "
+                                f"already exists as high-level tag"
+                            )
+                            continue
+
+                        if tag_key not in tag_cache:
                             tag = Tag(
                                 user_id=user_uuid,
                                 name=tag_name,
@@ -469,12 +577,12 @@ def generate_knowledge_graph_task(
                             session.add(tag)
                             await session.flush()
                             await session.refresh(tag)
-                            tag_cache[tag_name] = tag
+                            tag_cache[tag_key] = (tag, "low_level")
 
                         # Create association
                         doc_tag = DocumentTag(
                             document_id=node["id"],
-                            tag_id=tag_cache[tag_name].id,
+                            tag_id=tag_cache[tag_key][0].id,
                             tag_level="low",
                         )
                         session.add(doc_tag)
@@ -538,6 +646,14 @@ def generate_knowledge_graph_task(
                 await session.commit()
 
                 logger.info(f"Saved {len(graph_data['nodes'])} documents to PostgreSQL")
+
+                # Run tag cleanup to consolidate any duplicate tags at different levels
+                cleanup_result = await cleanup_duplicate_tags_for_user(session, user_uuid)
+                if cleanup_result["cleaned_tags"]:
+                    logger.info(
+                        f"Tag cleanup: consolidated {len(cleanup_result['cleaned_tags'])} duplicate tags, "
+                        f"promoted {cleanup_result['promoted_associations']} associations"
+                    )
 
                 return {
                     "nodes": len(graph_data["nodes"]),

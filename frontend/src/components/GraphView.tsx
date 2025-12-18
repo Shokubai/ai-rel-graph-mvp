@@ -79,11 +79,11 @@ export function GraphView({ uploadedData }: GraphViewProps) {
     if (!graphData) return { allTags: [], allHighLevelTags: [], allLowLevelTags: [], allEntities: [] };
 
     const highLevelTags = Array.from(
-      new Set(graphData.nodes.flatMap((node) => node.tags.high_level))
+      new Set(graphData.nodes.flatMap((node) => node.tags?.high_level || []))
     ).sort();
 
     const lowLevelTags = Array.from(
-      new Set(graphData.nodes.flatMap((node) => node.tags.low_level))
+      new Set(graphData.nodes.flatMap((node) => node.tags?.low_level || []))
     ).sort();
 
     // Combine all tags for unified filtering
@@ -92,7 +92,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
     ).sort();
 
     const entities = Array.from(
-      new Set(graphData.nodes.flatMap((node) => node.entities))
+      new Set(graphData.nodes.flatMap((node) => node.entities || []))
     ).sort();
 
     return { allTags, allHighLevelTags: highLevelTags, allLowLevelTags: lowLevelTags, allEntities: entities };
@@ -261,8 +261,8 @@ export function GraphView({ uploadedData }: GraphViewProps) {
 
     const titleLower = node.title.toLowerCase();
     const summaryLower = (node.summary || "").toLowerCase();
-    const allTags = [...node.tags.high_level, ...node.tags.low_level].map(t => t.toLowerCase());
-    const allEntities = node.entities.map(e => e.toLowerCase());
+    const allTags = [...(node.tags?.high_level || []), ...(node.tags?.low_level || [])].map(t => t.toLowerCase());
+    const allEntities = (node.entities || []).map(e => e.toLowerCase());
 
     // Exact phrase match in title, tags, or entities (strongest match)
     if (titleLower.includes(queryLower)) return true;
@@ -309,14 +309,14 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       // Tag filter match (node must have at least one selected tag from either high or low level)
       if (selectedTags.size > 0) {
         const hasSelectedTag =
-          node.tags.high_level.some((tag) => selectedTags.has(tag)) ||
-          node.tags.low_level.some((tag) => selectedTags.has(tag));
+          (node.tags?.high_level || []).some((tag) => selectedTags.has(tag)) ||
+          (node.tags?.low_level || []).some((tag) => selectedTags.has(tag));
         if (!hasSelectedTag) return false;
       }
 
       // Entity filter match (node must have at least one selected entity)
       if (selectedEntities.size > 0) {
-        const hasSelectedEntity = node.entities.some((entity) =>
+        const hasSelectedEntity = (node.entities || []).some((entity) =>
           selectedEntities.has(entity)
         );
         if (!hasSelectedEntity) return false;
@@ -325,6 +325,12 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       return true;
     };
   }, [searchQuery, selectedTags, selectedEntities]);
+
+  // Ref to store current shouldHighlightNode for use in D3 event handlers
+  const shouldHighlightNodeRef = useRef(shouldHighlightNode);
+  useEffect(() => {
+    shouldHighlightNodeRef.current = shouldHighlightNode;
+  }, [shouldHighlightNode]);
 
   // Helper functions for tag/entity selection
   const toggleTag = (tag: string) => {
@@ -400,13 +406,13 @@ export function GraphView({ uploadedData }: GraphViewProps) {
         else if (titleLower.startsWith(queryLower)) score += 30;
 
         // Bonus for tag matches
-        const allTags = [...node.tags.high_level, ...node.tags.low_level];
+        const allTags = [...(node.tags?.high_level || []), ...(node.tags?.low_level || [])];
         if (allTags.some((tag: string) => tag.toLowerCase() === queryLower)) score += 40;
         else if (allTags.some((tag: string) => tag.toLowerCase().includes(queryLower))) score += 20;
 
         // Bonus for entity matches
-        if (node.entities.some((entity: string) => entity.toLowerCase() === queryLower)) score += 40;
-        else if (node.entities.some((entity: string) => entity.toLowerCase().includes(queryLower))) score += 20;
+        if ((node.entities || []).some((entity: string) => entity.toLowerCase() === queryLower)) score += 40;
+        else if ((node.entities || []).some((entity: string) => entity.toLowerCase().includes(queryLower))) score += 20;
 
         return { node, score };
       })
@@ -475,13 +481,13 @@ export function GraphView({ uploadedData }: GraphViewProps) {
 
     // Extract unique high-level tags for color scale
     const allHighLevelTags = Array.from(
-      new Set(graphData.nodes.flatMap((node) => node.tags.high_level))
+      new Set(graphData.nodes.flatMap((node) => node.tags?.high_level || []))
     );
     const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(allHighLevelTags);
 
     // Helper: Get primary color for a node based on its most common high-level tag
     const getNodeColor = (node: GraphNode): string => {
-      if (node.tags.high_level.length === 0) return "#999";
+      if (!node.tags?.high_level || node.tags.high_level.length === 0) return "#999";
       // Use the first high-level tag as primary color
       return colorScale(node.tags.high_level[0]) as string;
     };
@@ -495,7 +501,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
           return sourceId === node.id || targetId === node.id;
         }
       ).length;
-      const entityCount = node.entities.length;
+      const entityCount = (node.entities || []).length;
       // Base size + scale by connections and entities
       return 5 + Math.sqrt(connectionCount * 2 + entityCount);
     };
@@ -683,7 +689,10 @@ export function GraphView({ uploadedData }: GraphViewProps) {
           .attr("stroke-opacity", (e) => e.similarity * 0.6)
           .attr("stroke-width", (e) => Math.sqrt(e.similarity) * 2);
 
-        node.transition().duration(200).attr("opacity", 1);
+        // Restore opacity based on current filter state (not just reset to 1)
+        node.transition().duration(200).attr("opacity", (n: GraphNode) =>
+          shouldHighlightNodeRef.current(n) ? 1 : 0.2
+        );
       })
       .on("click", (_event, d) => {
         setSelectedNode(d);
@@ -816,11 +825,11 @@ export function GraphView({ uploadedData }: GraphViewProps) {
               </div>
 
               {/* High-Level Tags */}
-              {selectedNode.tags.high_level.length > 0 && (
+              {(selectedNode.tags?.high_level || []).length > 0 && (
                 <div>
                   <h3 className="font-semibold text-gray-300">High-Level Tags</h3>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedNode.tags.high_level.map((tag, i) => (
+                    {(selectedNode.tags?.high_level || []).map((tag: string, i: number) => (
                       <button
                         key={i}
                         onClick={() => {
@@ -838,11 +847,11 @@ export function GraphView({ uploadedData }: GraphViewProps) {
               )}
 
               {/* Low-Level Tags */}
-              {selectedNode.tags.low_level.length > 0 && (
+              {(selectedNode.tags?.low_level || []).length > 0 && (
                 <div>
                   <h3 className="font-semibold text-gray-300">Low-Level Tags</h3>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedNode.tags.low_level.map((tag, i) => (
+                    {(selectedNode.tags?.low_level || []).map((tag: string, i: number) => (
                       <button
                         key={i}
                         onClick={() => {
@@ -862,7 +871,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
               <div>
                 <h3 className="font-semibold text-gray-300">Entities</h3>
                 <div className="flex flex-wrap gap-1 mt-1">
-                  {selectedNode.entities.map((entity, i) => (
+                  {(selectedNode.entities || []).map((entity: string, i: number) => (
                     <button
                       key={i}
                       onClick={() => {
@@ -1031,7 +1040,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                         />
                         <span className="text-sm text-white font-medium">{tag}</span>
                         <span className="text-xs text-gray-400 ml-auto">
-                          ({graphData.nodes.filter((n) => n.tags.high_level.includes(tag)).length})
+                          ({graphData.nodes.filter((n) => (n.tags?.high_level || []).includes(tag)).length})
                         </span>
                       </label>
                     ))
@@ -1073,7 +1082,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                         />
                         <span className="text-sm text-white">{tag}</span>
                         <span className="text-xs text-gray-400 ml-auto">
-                          ({graphData.nodes.filter((n) => n.tags.low_level.includes(tag)).length})
+                          ({graphData.nodes.filter((n) => (n.tags?.low_level || []).includes(tag)).length})
                         </span>
                       </label>
                     ))
@@ -1129,7 +1138,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
                     />
                     <span className="text-sm text-white">{entity}</span>
                     <span className="text-xs text-gray-400 ml-auto">
-                      ({graphData.nodes.filter((n) => n.entities.includes(entity)).length})
+                      ({graphData.nodes.filter((n) => (n.entities || []).includes(entity)).length})
                     </span>
                   </label>
                 ))
