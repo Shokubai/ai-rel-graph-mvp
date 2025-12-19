@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  labels:
+    app: airelgraph
+    component: celery-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: airelgraph
+      component: celery-worker
+  template:
+    metadata:
+      labels:
+        app: airelgraph
+        component: celery-worker
+    spec:
+      containers:
+        - name: celery-worker
+          image: ghcr.io/shokubai/airelgraph/backend:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          command:
+            - "celery"
+            - "-A"
+            - "app.core.celery_app"
+            - "worker"
+            - "--loglevel=info"
+            - "--concurrency=4"
+          # Celery workers don't have HTTP endpoints, use exec probe
+          livenessProbe:
+            exec:
+              command:
+                - "celery"
+                - "-A"
+                - "app.core.celery_app"
+                - "inspect"
+                - "ping"
+                - "--timeout"
+                - "10"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 3
+      # Optional: If using private registry
+      # imagePullSecrets:
+      #   - name: ghcr-secret
