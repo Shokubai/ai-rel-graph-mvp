@@ -15,12 +15,15 @@ class Document(Base):
 
     __tablename__ = "documents"
 
-    id = Column(String(255), primary_key=True)  # Google Drive file ID
+    id = Column(String(255), primary_key=True)  # Google Drive file ID or generated UUID for local uploads
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Document source tracking
+    source = Column(String(50), default="google_drive", nullable=False)  # 'google_drive' or 'local_upload'
 
     # Document metadata
     title = Column(String(500), nullable=False)
-    url = Column(String(1000))
+    url = Column(String(1000))  # None for local uploads
     mime_type = Column(String(100))
     author = Column(String(255))
     modified_at = Column(DateTime(timezone=True))

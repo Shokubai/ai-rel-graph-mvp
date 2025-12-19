@@ -1,13 +1,16 @@
 """LLM-based document tagging service using GPT-4."""
 import json
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from openai import OpenAI
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Type for progress callback: (current: int, total: int, doc_title: str) -> None
+TaggingProgressCallback = Callable[[int, int, str], None]
 
 
 class LLMTaggingService:
@@ -33,6 +36,7 @@ class LLMTaggingService:
         max_entities: int = 10,
         existing_tags: Optional[Set[str]] = None,
         existing_entities: Optional[Set[str]] = None,
+        progress_callback: Optional[TaggingProgressCallback] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """Extract metadata (summary, tags, entities) for multiple documents.
 
@@ -42,6 +46,8 @@ class LLMTaggingService:
             max_entities: Maximum number of entities per document
             existing_tags: Set of existing tags to maintain consistency
             existing_entities: Set of existing entities to maintain consistency
+            progress_callback: Optional callback for progress updates.
+                Called with (current, total, doc_title) for each document.
 
         Returns:
             Dict mapping document_id -> metadata dict with 'summary', 'tags', 'entities'
@@ -50,11 +56,16 @@ class LLMTaggingService:
         existing_entities = existing_entities or set()
 
         results = {}
+        total_docs = len(documents)
 
-        for doc in documents:
+        for idx, doc in enumerate(documents):
             doc_id = doc["id"]
             text = doc.get("text", "")
             title = doc.get("title", "Untitled")
+
+            # Report progress before processing each document
+            if progress_callback:
+                progress_callback(idx + 1, total_docs, title)
 
             if not text.strip():
                 logger.warning(f"Empty text for document {doc_id}, skipping")

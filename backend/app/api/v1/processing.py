@@ -4,15 +4,17 @@ File Processing API Endpoints
 This module provides endpoints to trigger and monitor file processing tasks.
 """
 
+import base64
 import logging
-from typing import Optional
+import uuid
+from typing import List, Optional
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
 from app.core.auth import get_current_user_id
-from app.workers.tasks import process_drive_files_task
+from app.workers.tasks import process_drive_files_task, process_uploaded_files_task
 
 logger = logging.getLogger(__name__)
 
@@ -204,3 +206,108 @@ async def cancel_task(
         "message": "Task cancellation requested",
         "status": "cancelled",
     }
+
+
+# Supported MIME types for local file uploads
+SUPPORTED_UPLOAD_TYPES = {
+    "application/pdf": "pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.ms-excel": "xls",
+    "text/plain": "txt",
+}
+
+# Maximum file size (10 MB)
+MAX_FILE_SIZE = 10 * 1024 * 1024
+
+
+class UploadFilesResponse(BaseModel):
+    """Response when file upload processing is initiated."""
+
+    task_id: str
+    """Celery task ID for tracking"""
+
+    message: str
+    """Human-readable message"""
+
+    files_received: int
+    """Number of files received"""
+
+    status: str = "started"
+    """Initial status"""
+
+
+@router.post("/upload", response_model=UploadFilesResponse)
+async def upload_files(
+    files: List[UploadFile] = File(...),
+    user_id: str = Depends(get_current_user_id),
+) -> UploadFilesResponse:
+    """
+    Upload and process local files.
+
+    This initiates an asynchronous task that will:
+    1. Extract text from each uploaded file
+    2. Generate embeddings and tags
+    3. Save documents to the database
+
+    Supported file types: PDF, DOCX, XLSX, TXT
+
+    Args:
+        files: List of files to upload
+        user_id: Authenticated user ID (from JWT)
+
+    Returns:
+        Task ID and status message
+    """
+    logger.info(f"Received {len(files)} files for upload from user: {user_id}")
+
+    # Validate and prepare files
+    files_data = []
+    for file in files:
+        # Check file size
+        content = await file.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File '{file.filename}' exceeds maximum size of 10 MB",
+            )
+
+        # Check MIME type
+        mime_type = file.content_type or "application/octet-stream"
+        if mime_type not in SUPPORTED_UPLOAD_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=f"File type '{mime_type}' is not supported. Supported types: PDF, DOCX, XLSX, TXT",
+            )
+
+        # Generate unique ID for local file
+        file_id = f"local_{uuid.uuid4().hex[:16]}"
+
+        # Encode content as base64 for JSON serialization
+        content_b64 = base64.b64encode(content).decode("utf-8")
+
+        files_data.append({
+            "id": file_id,
+            "filename": file.filename,
+            "mime_type": mime_type,
+            "content_b64": content_b64,
+            "size": len(content),
+        })
+
+        logger.info(f"  Prepared file: {file.filename} ({mime_type}, {len(content)} bytes)")
+
+    # Start the Celery task
+    task = process_uploaded_files_task.apply_async(
+        kwargs={
+            "user_id": user_id,
+            "files_data": files_data,
+        }
+    )
+
+    return UploadFilesResponse(
+        task_id=task.id,
+        message=f"Started processing {len(files_data)} uploaded files",
+        files_received=len(files_data),
+        status="started",
+    )

@@ -485,11 +485,24 @@ export function GraphView({ uploadedData }: GraphViewProps) {
     );
     const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(allHighLevelTags);
 
-    // Helper: Get primary color for a node based on its most common high-level tag
+    // Count how many documents have each high-level tag
+    const tagDocumentCounts: Record<string, number> = {};
+    graphData.nodes.forEach((node: GraphNode) => {
+      (node.tags?.high_level || []).forEach((tag: string) => {
+        tagDocumentCounts[tag] = (tagDocumentCounts[tag] || 0) + 1;
+      });
+    });
+
+    // Helper: Get primary color for a node based on its least common high-level tag
     const getNodeColor = (node: GraphNode): string => {
       if (!node.tags?.high_level || node.tags.high_level.length === 0) return "#999";
-      // Use the first high-level tag as primary color
-      return colorScale(node.tags.high_level[0]) as string;
+      // Find the high-level tag with the fewest documents (least common)
+      const leastCommonTag = node.tags.high_level.reduce((least, tag) => {
+        const leastCount = tagDocumentCounts[least] || 0;
+        const tagCount = tagDocumentCounts[tag] || 0;
+        return tagCount < leastCount ? tag : least;
+      });
+      return colorScale(leastCommonTag) as string;
     };
 
     // Calculate node size based on number of connections and entities
@@ -506,12 +519,28 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       return 5 + Math.sqrt(connectionCount * 2 + entityCount);
     };
 
-    // Define circular bounded area with triple the space
+    // Define circular bounded area scaled by document count
     const centerX = width / 2;
     const centerY = height / 2;
-    // Use 135% of the smaller dimension as radius (tripled from original ~45%)
-    const maxRadius = Math.min(width, height) * 1.35;
+    // Base radius at 135% of smaller dimension, scaled by document count
+    // Using power function (exponent 0.6) for sub-linear scaling:
+    // - 70 docs = 1.0x (baseline)
+    // - 140 docs = 1.5x (not 2x)
+    // - 280 docs = 2.3x (not 4x)
+    const baseRadius = Math.min(width, height) * 1.35;
+    const docCount = graphData.nodes.length;
+    const scaleFactor = Math.max(0.5, Math.pow(docCount / 70, 0.6)); // Sub-linear growth, min 50%
+    const maxRadius = baseRadius * scaleFactor;
     const featherZone = maxRadius * 0.1; // 10% feathering zone for soft boundary
+
+    // Filter edges to only include those where both source and target nodes exist
+    // This prevents "node not found" errors when documents are hidden/shown
+    const nodeIds = new Set(graphData.nodes.map((n: GraphNode) => n.id));
+    const validEdges = graphData.edges.filter((edge: GraphEdge) => {
+      const sourceId = typeof edge.source === "string" ? edge.source : (edge.source as GraphNode).id;
+      const targetId = typeof edge.target === "string" ? edge.target : (edge.target as GraphNode).id;
+      return nodeIds.has(sourceId) && nodeIds.has(targetId);
+    });
 
     // Create force simulation with circular boundary
     const simulation = d3
@@ -519,7 +548,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
       .force(
         "link",
         d3
-          .forceLink<GraphNode, GraphEdge>(graphData.edges)
+          .forceLink<GraphNode, GraphEdge>(validEdges)
           .id((d) => d.id)
           .distance((d) => {
             // Closer nodes for higher similarity - increased distance for looser graph
@@ -547,7 +576,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
             // Apply stronger force as node approaches boundary (feathering effect)
             const overshoot = distance - (maxRadius - featherZone);
             const strength = Math.min(overshoot / featherZone, 1); // 0 to 1
-            const force = strength * 0.1; // Gentle push back
+            const force = strength * 0.35; // Strong push back from edge
 
             const angle = Math.atan2(dy, dx);
             (node as d3.SimulationNodeDatum).x = nodeX - Math.cos(angle) * force * distance;
@@ -575,7 +604,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
     const link = g
       .append("g")
       .selectAll("line")
-      .data(graphData.edges)
+      .data(validEdges)
       .join("line")
       .attr("stroke", "#999")
       .attr("stroke-opacity", (d) => d.similarity * 0.6)
@@ -664,7 +693,7 @@ export function GraphView({ uploadedData }: GraphViewProps) {
           .transition()
           .duration(200)
           .attr("opacity", (n) => {
-            const isConnected = graphData.edges.some(
+            const isConnected = validEdges.some(
               (e) => {
                 const sourceId = typeof e.source === "string" ? e.source : (e.source as GraphNode).id;
                 const targetId = typeof e.target === "string" ? e.target : (e.target as GraphNode).id;

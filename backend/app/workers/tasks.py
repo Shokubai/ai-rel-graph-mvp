@@ -682,3 +682,385 @@ def generate_knowledge_graph_task(
             raise self.retry(exc=e, countdown=min(60 * (2**self.request.retries), 600))
 
         raise
+
+
+@celery_app.task(
+    bind=True,
+    base=DatabaseTask,
+    name="process_uploaded_files",
+    max_retries=3,
+    default_retry_delay=60,
+)
+def process_uploaded_files_task(
+    self: DatabaseTask,
+    user_id: str,
+    files_data: List[Dict[str, Any]],
+    similarity_threshold: float = 0.75,
+    max_tags_per_doc: int = 5,
+    max_entities_per_doc: int = 10,
+    use_top_k_similarity: bool = True,
+    top_k_neighbors: int = 2,
+    min_similarity: float = 0.3,
+    enable_hierarchy: bool = True,
+    hierarchy_split_threshold: int = 8,
+    hierarchy_cross_cutting_threshold: int = 5,
+) -> Dict[str, Any]:
+    """
+    Process uploaded files (local upload) and generate knowledge graph.
+
+    This task:
+    1. Decodes base64 file content
+    2. Extracts text from each file
+    3. Generates embeddings, tags, and entities
+    4. Saves documents to PostgreSQL with source='local_upload'
+
+    Args:
+        user_id: Google ID of the user
+        files_data: List of file data dictionaries with id, filename, mime_type, content_b64
+        similarity_threshold: Minimum similarity to create edge (0.0-1.0)
+        max_tags_per_doc: Maximum number of tags per document
+        max_entities_per_doc: Maximum number of entities per document
+        use_top_k_similarity: If True, use top-K neighbors approach
+        top_k_neighbors: Number of top similar documents per document
+        min_similarity: Minimum similarity to create edge in top-K mode
+        enable_hierarchy: If True, build hierarchical tag structure
+        hierarchy_split_threshold: Min documents per tag to consider splitting
+        hierarchy_cross_cutting_threshold: Min docs with tag combo for cross-cutting
+
+    Returns:
+        Dictionary with processing results
+    """
+    import base64
+
+    logger.info(f"Processing {len(files_data)} uploaded files for user {user_id}")
+
+    try:
+        # Step 1: Get user from database
+        user = self.session.query(User).filter(User.google_user_id == user_id).first()
+
+        if not user:
+            raise ValueError(f"User not found: {user_id}")
+
+        user_uuid = user.id
+        logger.info(f"Found user: {user.email}")
+
+        # Step 2: Initialize text extractor
+        text_extractor = TextExtractor()
+
+        # Step 3: Process each file
+        extracted_docs = []
+        failed_files = []
+        total_files = len(files_data)
+
+        for idx, file_data in enumerate(files_data, 1):
+            file_id = file_data["id"]
+            filename = file_data["filename"]
+            mime_type = file_data["mime_type"]
+
+            # Update task progress
+            self.update_state(
+                state="PROCESSING",
+                meta={
+                    "current": idx,
+                    "total": total_files,
+                    "current_file": filename,
+                    "status": f"Extracting text from {idx}/{total_files}",
+                },
+            )
+
+            logger.info(f"Processing {idx}/{total_files}: {filename}")
+
+            try:
+                # Decode base64 content
+                file_content = base64.b64decode(file_data["content_b64"])
+
+                # Extract text
+                raw_text = text_extractor.extract_text(file_content, mime_type, filename)
+                cleaned_text = text_extractor.clean_text(raw_text)
+                word_count = text_extractor.get_word_count(cleaned_text)
+
+                if word_count < 10:
+                    logger.warning(f"File {filename} has very little text ({word_count} words)")
+
+                # Build document object
+                document = {
+                    "id": file_id,
+                    "title": filename,
+                    "url": "",  # No URL for local files
+                    "mimeType": mime_type,
+                    "text_content": cleaned_text,
+                    "metadata": {
+                        "author": user.email,
+                        "modified_at": "",
+                        "size_bytes": file_data["size"],
+                        "word_count": word_count,
+                        "processed_at": datetime.now().isoformat(),
+                        "processed_by_user": user.email,
+                        "source": "local_upload",
+                    },
+                }
+
+                extracted_docs.append(document)
+                logger.info(f"  ✓ Extracted {word_count} words from {filename}")
+
+            except Exception as e:
+                logger.error(f"  ✗ Failed to process {filename}: {str(e)}")
+                failed_files.append({"file": filename, "error": str(e)})
+                continue
+
+        if not extracted_docs:
+            return {
+                "status": "failed",
+                "message": "No files could be processed",
+                "failed_files": failed_files,
+            }
+
+        # Step 4: Build knowledge graph
+        # Transform to graph builder format
+        graph_documents = []
+        for doc in extracted_docs:
+            graph_documents.append({
+                "id": doc["id"],
+                "title": doc["title"],
+                "url": doc.get("url", ""),
+                "text": doc.get("text_content", ""),
+                "author": doc.get("metadata", {}).get("author", "Unknown"),
+                "modified": doc.get("metadata", {}).get("modified_at", ""),
+            })
+
+        # Create progress callback for graph building
+        def graph_progress_callback(step: str, current: int, total: int, detail: str):
+            """Update Celery task state with graph building progress."""
+            self.update_state(
+                state="PROCESSING",
+                meta={
+                    "current": current,
+                    "total": total,
+                    "current_file": detail,
+                    "status": detail,
+                    "step": step,
+                },
+            )
+
+        # Initial progress update
+        self.update_state(
+            state="PROCESSING",
+            meta={
+                "current": 0,
+                "total": total_files,
+                "status": "Starting graph generation...",
+                "step": "graph_init",
+            },
+        )
+
+        # Build graph
+        graph_builder = GraphBuilder(
+            similarity_threshold=similarity_threshold,
+            max_tags_per_doc=max_tags_per_doc,
+            max_entities_per_doc=max_entities_per_doc,
+            use_top_k_similarity=use_top_k_similarity,
+            top_k_neighbors=top_k_neighbors,
+            min_similarity=min_similarity,
+            enable_hierarchy=enable_hierarchy,
+            hierarchy_split_threshold=hierarchy_split_threshold,
+            hierarchy_cross_cutting_threshold=hierarchy_cross_cutting_threshold,
+        )
+
+        graph_data = graph_builder.build_graph_from_documents(
+            graph_documents,
+            progress_callback=graph_progress_callback,
+        )
+
+        # Step 5: Save to PostgreSQL database
+        self.update_state(
+            state="PROCESSING",
+            meta={
+                "current": total_files,
+                "total": total_files,
+                "status": "Saving to database...",
+            },
+        )
+
+        # Import async dependencies
+        import asyncio
+        from app.db.session import AsyncSessionLocal
+        from app.db.models.document import Document
+        from app.db.models.tag import Tag
+        from app.db.models.entity import Entity
+        from app.db.models.document_tag import DocumentTag
+        from app.db.models.document_entity import DocumentEntity
+        from app.db.models.document_similarity import DocumentSimilarity
+
+        async def save_to_database():
+            """Save graph data to PostgreSQL."""
+            from sqlalchemy import select as sa_select
+
+            async with AsyncSessionLocal() as session:
+                # Track tag and entity caches
+                tag_cache = {}
+                high_level_tag_names = set()
+                entity_cache = {}
+
+                # Create documents with source='local_upload'
+                for node in graph_data["nodes"]:
+                    orig_doc = next((d for d in extracted_docs if d["id"] == node["id"]), None)
+
+                    doc = Document(
+                        id=node["id"],
+                        user_id=user_uuid,
+                        source="local_upload",  # Mark as local upload
+                        title=node["title"],
+                        url=None,  # No URL for local files
+                        mime_type=orig_doc.get("mimeType", "") if orig_doc else "",
+                        author=node.get("author", "Unknown"),
+                        modified_at=None,
+                        text_content=orig_doc.get("text_content", "") if orig_doc else "",
+                        summary=node.get("summary", ""),
+                        word_count=orig_doc.get("metadata", {}).get("word_count", 0) if orig_doc else 0,
+                        embedding=None,
+                        is_enabled=True,
+                    )
+                    session.add(doc)
+
+                await session.flush()
+
+                # Create tags and associations
+                for node in graph_data["nodes"]:
+                    tags_data = node.get("tags", {})
+                    high_level_tags = tags_data.get("high_level", []) if isinstance(tags_data, dict) else []
+                    low_level_tags = tags_data.get("low_level", []) if isinstance(tags_data, dict) else []
+
+                    # Create high-level tags
+                    for tag_name in high_level_tags:
+                        tag_key = tag_name.lower().strip()
+                        high_level_tag_names.add(tag_key)
+
+                        if tag_key not in tag_cache:
+                            tag = Tag(
+                                user_id=user_uuid,
+                                name=tag_name,
+                                tag_type="high_level",
+                            )
+                            session.add(tag)
+                            await session.flush()
+                            await session.refresh(tag)
+                            tag_cache[tag_key] = (tag, "high_level")
+
+                        doc_tag = DocumentTag(
+                            document_id=node["id"],
+                            tag_id=tag_cache[tag_key][0].id,
+                            tag_level="high",
+                        )
+                        session.add(doc_tag)
+
+                    # Create low-level tags (skip duplicates)
+                    for tag_name in low_level_tags:
+                        tag_key = tag_name.lower().strip()
+
+                        if tag_key in high_level_tag_names:
+                            continue
+
+                        if tag_key not in tag_cache:
+                            tag = Tag(
+                                user_id=user_uuid,
+                                name=tag_name,
+                                tag_type="low_level",
+                            )
+                            session.add(tag)
+                            await session.flush()
+                            await session.refresh(tag)
+                            tag_cache[tag_key] = (tag, "low_level")
+
+                        doc_tag = DocumentTag(
+                            document_id=node["id"],
+                            tag_id=tag_cache[tag_key][0].id,
+                            tag_level="low",
+                        )
+                        session.add(doc_tag)
+
+                await session.flush()
+
+                # Create entities and associations
+                for node in graph_data["nodes"]:
+                    entities = node.get("entities", [])
+
+                    for entity_name in entities:
+                        if entity_name not in entity_cache:
+                            entity = Entity(
+                                user_id=user_uuid,
+                                name=entity_name,
+                                entity_type="UNKNOWN",
+                            )
+                            session.add(entity)
+                            await session.flush()
+                            await session.refresh(entity)
+                            entity_cache[entity_name] = entity
+
+                        doc_entity = DocumentEntity(
+                            document_id=node["id"],
+                            entity_id=entity_cache[entity_name].id,
+                        )
+                        session.add(doc_entity)
+
+                await session.flush()
+
+                # Create similarity edges
+                for edge in graph_data["edges"]:
+                    source = edge["source"]
+                    target = edge["target"]
+                    score = edge["similarity"]
+
+                    if source == target:
+                        continue
+
+                    if source > target:
+                        source, target = target, source
+
+                    if source >= target:
+                        continue
+
+                    similarity = DocumentSimilarity(
+                        source_document_id=source,
+                        target_document_id=target,
+                        similarity_score=score,
+                    )
+                    session.add(similarity)
+
+                await session.commit()
+
+                logger.info(f"Saved {len(graph_data['nodes'])} documents to PostgreSQL")
+
+                # Run tag cleanup
+                cleanup_result = await cleanup_duplicate_tags_for_user(session, user_uuid)
+                if cleanup_result["cleaned_tags"]:
+                    logger.info(
+                        f"Tag cleanup: consolidated {len(cleanup_result['cleaned_tags'])} duplicate tags"
+                    )
+
+                return {
+                    "nodes": len(graph_data["nodes"]),
+                    "edges": len(graph_data["edges"]),
+                    "tags": len(tag_cache),
+                    "entities": len(entity_cache),
+                }
+
+        # Run async save
+        result = asyncio.run(save_to_database())
+
+        return {
+            "status": "completed",
+            "message": f"Processed {len(extracted_docs)} files, generated graph with {result['nodes']} nodes",
+            "nodes": result["nodes"],
+            "edges": result["edges"],
+            "tags": result["tags"],
+            "entities": result["entities"],
+            "failed_files": failed_files,
+        }
+
+    except Exception as e:
+        logger.error(f"Upload processing failed: {str(e)}")
+
+        if "rate_limit" in str(e).lower() or "timeout" in str(e).lower():
+            raise self.retry(exc=e, countdown=min(60 * (2**self.request.retries), 600))
+
+        raise

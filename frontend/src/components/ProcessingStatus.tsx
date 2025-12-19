@@ -27,6 +27,7 @@ interface FileProcessingStatus {
   total?: number;
   current_file?: string;
   status?: string;
+  step?: string; // Current processing step (e.g., 'tagging', 'embeddings', 'similarity')
   result?: {
     // Old two-step flow (Google Drive)
     documents_file?: string;
@@ -325,9 +326,43 @@ export function ProcessingStatus({
               {/* Detailed Status */}
               {stage === "file_processing" && fileStatus && (
                 <div className="space-y-3">
+                  {/* Step indicator badges */}
+                  {fileStatus.step && (
+                    <div className="flex flex-wrap gap-2 justify-center mb-3">
+                      {["extraction", "embeddings", "tagging", "hierarchy", "edges", "finalizing"].map((step) => {
+                        const isActive = fileStatus.step === step ||
+                          (fileStatus.step === "graph_init" && step === "extraction") ||
+                          (fileStatus.step === "similarity" && step === "embeddings") ||
+                          (fileStatus.step === "building" && step === "edges");
+                        const isPast = ["extraction", "embeddings", "similarity", "tagging", "hierarchy", "edges", "finalizing", "building"].indexOf(fileStatus.step || "") >
+                          ["extraction", "embeddings", "similarity", "tagging", "hierarchy", "edges", "finalizing", "building"].indexOf(step);
+                        return (
+                          <span
+                            key={step}
+                            className={`px-2 py-1 rounded text-xs font-medium transition-all ${
+                              isActive
+                                ? "bg-blue-600 text-white"
+                                : isPast
+                                ? "bg-green-900/50 text-green-400"
+                                : "bg-gray-800 text-gray-500"
+                            }`}
+                          >
+                            {step === "extraction" ? "Extract" :
+                             step === "embeddings" ? "Embed" :
+                             step === "tagging" ? "Tag" :
+                             step === "hierarchy" ? "Hierarchy" :
+                             step === "edges" ? "Connect" :
+                             step === "finalizing" ? "Finalize" : step}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                   {fileStatus.current_file && (
                     <div className="p-4 bg-gray-900 rounded-lg border border-gray-800">
-                      <div className="text-xs text-gray-500 mb-1">Currently Processing:</div>
+                      <div className="text-xs text-gray-500 mb-1">
+                        {fileStatus.step === "tagging" ? "Analyzing & Tagging:" : "Currently Processing:"}
+                      </div>
                       <div className="text-sm text-white font-medium truncate">
                         {fileStatus.current_file}
                       </div>
@@ -335,7 +370,9 @@ export function ProcessingStatus({
                   )}
                   {fileStatus.current !== undefined && fileStatus.total !== undefined && (
                     <div className="text-center text-sm text-gray-400">
-                      Processing file {fileStatus.current} of {fileStatus.total}
+                      {fileStatus.step === "tagging"
+                        ? `Tagging document ${fileStatus.current} of ${fileStatus.total}`
+                        : `Processing ${fileStatus.current} of ${fileStatus.total}`}
                     </div>
                   )}
                 </div>
@@ -377,8 +414,9 @@ export function ProcessingStatus({
                     Knowledge Graph Created!
                   </h3>
                   <p className="text-green-300 text-sm">
-                    {graphStatus?.result?.nodes} documents connected with{" "}
-                    {graphStatus?.result?.edges} relationships
+                    {/* Show stats from either graph generation (two-step) or file processing result (one-step) */}
+                    {graphStatus?.result?.nodes ?? fileStatus?.result?.nodes ?? "Your"} documents connected with{" "}
+                    {graphStatus?.result?.edges ?? fileStatus?.result?.edges ?? "new"} relationships
                   </p>
                   <p className="text-gray-400 text-sm mt-2">Redirecting to graph view...</p>
                 </div>
