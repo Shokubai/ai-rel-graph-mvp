@@ -15,23 +15,3 @@ spec:
       port: 8000
       targetPort: http
       protocol: TCP
----
-# Traefik IngressRoute for api-arg.kaelem.dev
-apiVersion: traefik.io/v1alpha1
-kind: IngressRoute
-metadata:
-  name: backend-ingress
-  labels:
-    app: airelgraph
-    component: backend
-spec:
-  entryPoints:
-    - websecure
-  routes:
-    - match: Host(`api-arg.kaelem.dev`)
-      kind: Rule
-      services:
-        - name: backend
-          port: 8000
-  tls:
-    certResolver: letsencrypt

@@ -19,6 +19,7 @@ resources:
   - deployment.yaml
   - celery-deployment.yaml
   - service.yaml
+  - ingress.yaml
 
 # Generate secrets from .env file at deploy time
 # Run the deploy.sh script which copies backend/.env here before applying
