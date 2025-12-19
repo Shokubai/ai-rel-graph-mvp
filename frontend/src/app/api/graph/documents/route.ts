@@ -1,40 +1,44 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { SignJWT } from "jose";
+import { authOptions } from "@/lib/auth";
 
 // Use INTERNAL_API_URL for server-side requests (Docker network)
 const API_BASE = process.env.INTERNAL_API_URL || "http://localhost:8000";
 
-/**
- * Get JWT token from backend auth endpoint
- */
-async function getAuthToken(req: NextRequest): Promise<string> {
-  const tokenResponse = await fetch(
-    `${req.nextUrl.origin}/api/auth/token`,
-    {
-      headers: {
-        cookie: req.headers.get("cookie") || "",
-      },
-    }
-  );
-
-  if (!tokenResponse.ok) {
-    throw new Error("Failed to get authentication token");
-  }
-
-  const data = await tokenResponse.json();
-  return data.token;
-}
-
-export async function GET(req: NextRequest) {
+export async function GET() {
   try {
-    console.log("[PROXY] GET /api/graph/documents - API_BASE:", API_BASE);
+    // Get session directly (no HTTP request needed)
+    const session = await getServerSession(authOptions);
 
-    // Get auth token
-    const token = await getAuthToken(req);
-    console.log("[PROXY] Got auth token, first 20 chars:", token.substring(0, 20));
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: "Unauthorized", details: "No session found" },
+        { status: 401 }
+      );
+    }
+
+    // Generate JWT token directly
+    if (!process.env.NEXTAUTH_SECRET) {
+      return NextResponse.json(
+        { error: "Server configuration error", details: "NEXTAUTH_SECRET not set" },
+        { status: 500 }
+      );
+    }
+
+    const secret = new TextEncoder().encode(process.env.NEXTAUTH_SECRET);
+    const token = await new SignJWT({
+      sub: session.user.id,
+      email: session.user.email,
+      name: session.user.name,
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(secret);
 
     // Fetch documents from backend
     const backendUrl = `${API_BASE}/api/v1/graph/documents`;
-    console.log("[PROXY] Calling backend:", backendUrl);
 
     const response = await fetch(backendUrl, {
       headers: {
@@ -43,26 +47,29 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    console.log("[PROXY] Backend response status:", response.status);
-
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error("[PROXY] Backend error:", errorData);
+      const errorText = await response.text();
+      let errorData;
+      try {
+        errorData = JSON.parse(errorText);
+      } catch {
+        errorData = { detail: errorText };
+      }
       return NextResponse.json(
-        { error: errorData.detail || "Failed to fetch documents" },
+        { error: errorData.detail || "Failed to fetch documents", backendStatus: response.status },
         { status: response.status }
       );
     }
 
     const data = await response.json();
-    console.log("[PROXY] Success, returning", data.documents?.length || 0, "documents");
     return NextResponse.json(data);
   } catch (error) {
-    console.error("[PROXY] Error in proxy route:", error);
+    console.error("[PROXY] Error:", error);
     return NextResponse.json(
       {
         error: "Internal server error",
-        details: error instanceof Error ? error.message : String(error)
+        details: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       },
       { status: 500 }
     );

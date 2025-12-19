@@ -1,33 +1,41 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { SignJWT } from "jose";
+import { authOptions } from "@/lib/auth";
 
 // Use INTERNAL_API_URL for server-side requests (Docker network)
 const API_BASE = process.env.INTERNAL_API_URL || "http://localhost:8000";
 
-/**
- * Get JWT token from backend auth endpoint
- */
-async function getAuthToken(req: NextRequest): Promise<string> {
-  const tokenResponse = await fetch(
-    `${req.nextUrl.origin}/api/auth/token`,
-    {
-      headers: {
-        cookie: req.headers.get("cookie") || "",
-      },
-    }
-  );
-
-  if (!tokenResponse.ok) {
-    throw new Error("Failed to get authentication token");
-  }
-
-  const data = await tokenResponse.json();
-  return data.token;
-}
-
-export async function DELETE(req: NextRequest) {
+export async function DELETE() {
   try {
-    // Get auth token
-    const token = await getAuthToken(req);
+    // Get session directly
+    const session = await getServerSession(authOptions);
+
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: "Unauthorized", details: "No session found" },
+        { status: 401 }
+      );
+    }
+
+    // Generate JWT token
+    if (!process.env.NEXTAUTH_SECRET) {
+      return NextResponse.json(
+        { error: "Server configuration error" },
+        { status: 500 }
+      );
+    }
+
+    const secret = new TextEncoder().encode(process.env.NEXTAUTH_SECRET);
+    const token = await new SignJWT({
+      sub: session.user.id,
+      email: session.user.email,
+      name: session.user.name,
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(secret);
 
     // Delete all user data from backend
     const response = await fetch(`${API_BASE}/api/v1/graph/documents/delete-all`, {
@@ -51,7 +59,10 @@ export async function DELETE(req: NextRequest) {
   } catch (error) {
     console.error("Error deleting all data:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      {
+        error: "Internal server error",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     );
   }
