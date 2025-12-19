@@ -3,8 +3,11 @@ import { getServerSession } from "next-auth";
 import { SignJWT } from "jose";
 import { authOptions } from "@/lib/auth";
 
-// Use INTERNAL_API_URL for server-side requests (Docker network)
-const API_BASE = process.env.INTERNAL_API_URL || "http://localhost:8000";
+// Use INTERNAL_API_URL for Docker, NEXT_PUBLIC_API_URL for Vercel
+const API_BASE =
+  process.env.INTERNAL_API_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8000";
 
 export async function GET() {
   try {
