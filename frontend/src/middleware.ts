@@ -15,6 +15,7 @@ export default withAuth(
     return NextResponse.next();
   },
   {
+    secret: process.env.NEXTAUTH_SECRET,
     callbacks: {
       authorized: ({ token }) => {
         // Allow access if token exists and no refresh error
