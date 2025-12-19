@@ -499,8 +499,21 @@ def generate_knowledge_graph_task(
                 logger.info(f"Found user UUID {user_uuid} for google_user_id {user_id}")
 
                 # Continue with saving...
-                # Create documents
+                # Create documents (skip if already exists)
+                created_doc_ids = set()
                 for node in graph_data["nodes"]:
+                    # Check if document already exists
+                    existing_doc = await session.execute(
+                        sa_select(Document).filter(
+                            Document.id == node["id"],
+                            Document.user_id == user_uuid
+                        )
+                    )
+                    if existing_doc.scalar_one_or_none():
+                        logger.info(f"Document {node['id']} already exists, skipping creation")
+                        created_doc_ids.add(node["id"])  # Track it so we can still create associations
+                        continue
+
                     # Find embedding from original extracted_docs
                     orig_doc = next((d for d in extracted_docs if d["id"] == node["id"]), None)
 
@@ -518,6 +531,7 @@ def generate_knowledge_graph_task(
                         is_enabled=True,
                     )
                     session.add(doc)
+                    created_doc_ids.add(node["id"])
 
                 await session.flush()
 
@@ -901,8 +915,21 @@ def process_uploaded_files_task(
                 high_level_tag_names = set()
                 entity_cache = {}
 
-                # Create documents with source='local_upload'
+                # Create documents with source='local_upload' (skip if already exists)
+                created_doc_ids = set()
                 for node in graph_data["nodes"]:
+                    # Check if document already exists
+                    existing_doc = await session.execute(
+                        sa_select(Document).filter(
+                            Document.id == node["id"],
+                            Document.user_id == user_uuid
+                        )
+                    )
+                    if existing_doc.scalar_one_or_none():
+                        logger.info(f"Document {node['id']} already exists, skipping creation")
+                        created_doc_ids.add(node["id"])  # Track it so we can still create associations
+                        continue
+
                     orig_doc = next((d for d in extracted_docs if d["id"] == node["id"]), None)
 
                     doc = Document(
@@ -921,6 +948,7 @@ def process_uploaded_files_task(
                         is_enabled=True,
                     )
                     session.add(doc)
+                    created_doc_ids.add(node["id"])
 
                 await session.flush()
 
