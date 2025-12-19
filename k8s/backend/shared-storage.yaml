@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: processed-files-pvc
+  labels:
+    app: airelgraph
+    component: shared-storage
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple pods can read/write
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: truenas-nfs-nfs-subdir-external-provisioner

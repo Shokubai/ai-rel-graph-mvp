@@ -40,6 +40,9 @@ spec:
             - "worker"
             - "--loglevel=info"
             - "--concurrency=4"
+          volumeMounts:
+            - name: processed-files
+              mountPath: /app/processed_files
           # Celery workers don't have HTTP endpoints, use exec probe
           livenessProbe:
             exec:
@@ -55,6 +58,10 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 15
             failureThreshold: 3
+      volumes:
+        - name: processed-files
+          persistentVolumeClaim:
+            claimName: processed-files-pvc
       # Optional: If using private registry
       # imagePullSecrets:
       #   - name: ghcr-secret

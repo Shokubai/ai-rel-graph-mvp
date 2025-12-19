@@ -16,6 +16,7 @@ resources:
   - configmap.yaml
   - postgres.yaml
   - redis.yaml
+  - shared-storage.yaml
   - deployment.yaml
   - celery-deployment.yaml
   - service.yaml
